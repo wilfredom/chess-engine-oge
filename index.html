@@ -97,7 +97,7 @@
     position: static; display: inline-block; width: 22px; height: 22px;
     z-index: auto; pointer-events: auto; will-change: auto; flex: none;
   }
-  .captured { flex: 1; justify-content: flex-end; min-width: 0; }
+  .captured { flex: 1 0 auto; justify-content: flex-end; max-width: 60%; }
   .captured .cap { display: inline-flex; align-items: center; margin-left: 2px; }
   .captured .cap .n { font-size: 11px; color: var(--muted); margin-left: -3px; }
   .captured .balance { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 6px; }
@@ -740,16 +740,17 @@
 
   function playerName(color) {
     if (settings.mode === 'hvb' && color === G.humanColor) return 'You';
-    const lvl = levelFor(color);
-    return `Bot · Level ${lvl}` + (lvl === 0 ? ' (random)' : lvl === O.MAX_SKILL ? ' (full strength)' : '');
+    return `Bot · Level ${levelFor(color)}`;
   }
 
   function renderBar(where, color) {
     const bar = $('bar-' + where);
-    $('name-' + where).textContent = playerName(color) + ` · ${color === 'white' ? 'White' : 'Black'}`;
-    let sub = '';
-    if (!G.result && sideToMove() === color) sub = G.thinking && G.thinking.color === color ? 'thinking…' : (clockSide() ? 'to move' : (settings.mode === 'bvb' ? 'paused' : ''));
-    $('sub-' + where).textContent = sub;
+    $('name-' + where).textContent = playerName(color);
+    const sub = [color === 'white' ? 'White' : 'Black'];
+    const lvl = levelFor(color);
+    if (!(settings.mode === 'hvb' && color === G.humanColor)) { if (lvl === 0) sub.push('random'); else if (lvl === O.MAX_SKILL) sub.push('full strength'); }
+    if (!G.result && sideToMove() === color) sub.push(G.thinking && G.thinking.color === color ? 'thinking…' : (clockSide() ? 'to move' : (settings.mode === 'bvb' ? 'paused' : 'to move')));
+    $('sub-' + where).textContent = sub.join(' · ');
     bar.classList.toggle('to-move', !G.result && sideToMove() === color);
     const fen = isLive() ? G.pos.fen() : G.fens[G.view];
     const cap = capturedPieces(fen);
@@ -858,7 +859,9 @@
     $('level-white').value = String(settings.whiteLevel);
     $('level-black').value = String(settings.blackLevel);
     $('variant').value = settings.variant;
-    if (document.activeElement !== $('pos960')) $('pos960').value = String(settings.startNumber);
+    const inp = $('pos960'), typed = Math.floor(Number(inp.value));
+    const editing = document.activeElement === inp && (inp.value === '' || isNaN(typed) || typed < 0 || typed > 959);
+    if (!editing && inp.value !== String(settings.startNumber)) inp.value = String(settings.startNumber);
     $('fen960').textContent = chess960Fen(settings.startNumber);
     const hvb = settings.mode === 'hvb', c960 = settings.variant === 'chess960';
     document.querySelectorAll('.hvb-only').forEach(el => { el.hidden = !hvb; });
