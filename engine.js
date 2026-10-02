@@ -204,7 +204,6 @@ class Position {
     this.kingSq = new Int8Array(2);
     this.hashLo = 0; this.hashHi = 0;
     this.histPly = 0;             // index into the undo stacks
-    this.gamePly = 0;             // plies played in the game (not search)
     this.chess960 = false;        // only affects move notation
     // undo stacks
     this.uMove = new Int32Array(MAX_HISTORY);
@@ -285,7 +284,6 @@ class Position {
     this.halfmove = parts[4] ? parseInt(parts[4], 10) || 0 : 0;
     this.fullmove = parts[5] ? parseInt(parts[5], 10) || 1 : 1;
     this.histPly = 0;
-    this.gamePly = 0;
     this.computeHash();
   }
 
@@ -942,17 +940,6 @@ function evaluate(pos) {
   return pos.side === WHITE ? score : -score;
 }
 
-/* Material only, from White's point of view. The skill levels use it
-   to recognise sacrifices and the search to detect bare kings. */
-function materialBalance(pos) {
-  let m = 0;
-  for (let sq = 0; sq < 64; sq++) {
-    const p = pos.board[sq];
-    if (p && typeOf(p) !== KING) m += colorOf(p) === WHITE ? PIECE_VALUE[typeOf(p)] : -PIECE_VALUE[typeOf(p)];
-  }
-  return m;
-}
-
 function hasNonPawnMaterial(pos, color) {
   for (let sq = 0; sq < 64; sq++) {
     const p = pos.board[sq];
@@ -1505,37 +1492,69 @@ class Search {
    ================================================================
 
    Skill_Level 0 plays a random legal move, except that it always
-   delivers checkmate in one when it can. Skill_Level N (the maximum)
-   is the engine at full strength. Every level in between searches at
-   full strength and then deliberately picks a weaker move, using a
-   budget of centipawns it is allowed to throw away per 40 moves.
-   Nothing else changes with the level: not the depth, not the node
-   count, not the time, so a level plays the same at any time control.
+   delivers checkmate in one when it can. The top level is the engine
+   at full strength. Every level in between searches like the top
+   level and then deliberately plays a weaker move, chosen with a
+   budget of centipawns it may throw away per 40 moves. That budget is
+   the only thing that differs between levels: not the depth, not the
+   node count, not the time, so a level plays the same at any time
+   control (the calibration is valid from 60+0.6 upwards).
 
    How a move is chosen:
-     1. Search with MultiPV 5: the top five moves get exact scores.
-        Every other legal move gets a cheap estimate (a quiescence
-        search after the move), floored at the loss of the fifth move,
-        so a move outside the top five is never rated better than one
-        inside it.
-     2. The "loss" of a move is best score minus that move's score.
-     3. Each move the allowance BUDGET/40 is added to an accumulator
-        (capped at the whole 40-move budget). We pick, uniformly at
-        random, one of the moves whose loss fits in the accumulator and
-        pay its loss from it. So a weak level sprays inaccuracies and
-        the odd big blunder, then plays carefully while it recovers.
-     4. When the best move wins by force (a mate score) we just play it.
+     1. The normal search runs as usual (with 70% of the move time);
+        it yields the best move and its score. In the time that is
+        left, the next four root moves are searched two plies
+        shallower, so the top five moves have searched scores. The
+        rest of the legal moves get a cheap estimate: a quiescence
+        search a few plies deep after the move, with mate in one and
+        stalemate recognised. An estimate is never rated closer to
+        the best move than the worst searched line, nor closer than
+        MIN_UNSEARCHED_LOSS, because a shallow estimate proves little.
+     2. The "loss" of a move is the best score minus that move's score.
+     3. Each move the allowance BUDGET/40 is added to the mover's
+        accumulator (capped at the whole 40-move budget; one
+        accumulator per colour, so one engine can serve two bots). One
+        of the moves whose loss fits in the accumulator is picked
+        uniformly at random, and its loss is paid from it. A weak level
+        therefore sprays inaccuracies and the odd big blunder, then
+        plays carefully while it recovers.
+     4. When the best move wins by force (a mate score) it is played.
 
-   With an unlimited budget this is exactly the random mover of level 0,
-   with a zero budget it is the best move, and in between strength grows
-   smoothly as the budget shrinks. The table below is the only strength
-   knob and was tuned with fastchess matches (see the COLOPHON).
+   With an unlimited budget this is the random mover of level 0, with a
+   zero budget it is the best move, and in between strength grows as
+   the budget shrinks. The table below is the only strength knob. It
+   was calibrated with fastchess so that each level is 100-200 Elo
+   stronger than the one below it (see the COLOPHON for the method and
+   the measured gaps).
 */
 
 const SKILL_BUDGET_PER_40_MOVES = [
-  Infinity,  // level 0: random moves (handled separately)
-  40000, 20000, 10000, 5000, 2400, 1200, 600, 320, 160, 80, 40, 16,
-  0,         // top level: full strength
+  Infinity,   // level 0: random moves (handled separately)
+  25369,     // level 1
+  22627,     // level 2
+  19027,     // level 3
+  17000,     // level 4
+  15000,     // level 5
+  13455,     // level 6
+  11980,     // level 7
+  10676,     // level 8
+  9514,      // level 9
+  8354,      // level 10
+  6987,      // level 11
+  5844,      // level 12
+  4888,      // level 13
+  3419,      // level 14
+  2650,      // level 15
+  2000,      // level 16
+  1414,      // level 17
+  1000,      // level 18
+  620,       // level 19
+  400,       // level 20
+  250,       // level 21
+  193,       // level 22
+  100,       // level 23
+  60,        // level 24
+  0,          // level 25: full strength
 ];
 const MAX_SKILL = SKILL_BUDGET_PER_40_MOVES.length - 1;
 const MIN_UNSEARCHED_LOSS = 20;   // centipawns; a move outside the searched lines is never rated closer than this
@@ -1769,7 +1788,7 @@ class Engine {
       for (i++; i < tokens.length; i++) {
         const m = this.pos.parseMove(tokens[i]);
         if (m === NO_MOVE) { this.send(`info string illegal move: ${tokens[i]}`); this.positionInvalid = true; break; }
-        this.pos.make(m); this.pos.gamePly++; count++;
+        this.pos.make(m); count++;
       }
     }
     // A shorter move list than last time means a new game started without ucinewgame.
