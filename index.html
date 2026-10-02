@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>OGE Chess</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232d6a4f'/%3E%3Cpath d='M0 0h8v8H0zM8 8h8v8H8z' fill='%23fff' fill-opacity='.85'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="vendor/chessground.base.css">
+<link rel="stylesheet" href="vendor/chessground.brown.css">
+<link rel="stylesheet" href="vendor/chessground.cburnett.css">
+<style>
+  :root {
+    --bg: #f3f1ec;
+    --panel: #ffffff;
+    --text: #1e1e1c;
+    --muted: #6d6b66;
+    --border: #dcd8cf;
+    --accent: #2d6a4f;
+    --accent-text: #ffffff;
+    --soft: #e9f3ec;
+    --danger: #b3261e;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --panel: #212326;
+      --text: #e8e6e1;
+      --muted: #9b9890;
+      --border: #35383d;
+      --accent: #6fbf8f;
+      --accent-text: #0f1a14;
+      --soft: #24332a;
+      --danger: #ff8a80;
+      --shadow: none;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; overflow-x: hidden; max-width: 100%; }
+  body {
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-text-size-adjust: 100%;
+    min-height: 100dvh;
+  }
+  button, select, input { font: inherit; color: inherit; }
+  header {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 10px max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+    max-width: 1200px; margin: 0 auto;
+  }
+  header h1 { font-size: 20px; margin: 0; letter-spacing: 0.2px; }
+  header .tag { color: var(--muted); font-size: 13px; }
+  main.layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 10px max(12px, env(safe-area-inset-right)) 24px max(12px, env(safe-area-inset-left));
+    max-width: 1200px; margin: 0 auto;
+  }
+  /* --bs is the board size; the bars, the action row and the status line below share it, so it lives on their parent */
+  .board-col { --bs: min(100vw - 24px, 70vh); display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
+  .side-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .board-area { width: var(--bs); max-width: 100%; position: relative; }
+  /* the height follows the real width, so the board stays square even when max-width clamps it (classic scrollbars, notches) */
+  #board { width: 100%; height: var(--bs); }
+  @supports (aspect-ratio: 1 / 1) { #board { height: auto; aspect-ratio: 1 / 1; } }
+  #board coords.files { left: 0; width: 100%; }   /* keep the file letters inside the board (no horizontal overflow) */
+  @media (min-width: 760px) {
+    main.layout {
+      grid-template-columns: minmax(0, 1fr) 340px; align-items: start;
+      padding: 12px max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left));
+    }
+    .board-col { --bs: min(100vw - 32px - 340px - 24px, 84vh, 760px); }
+  }
+
+  /* player bars */
+  .bar {
+    width: var(--bs); max-width: 100%;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 10px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: var(--shadow);
+    min-height: 44px;
+  }
+  /* The name (with the bot level) keeps its full width; the captured pieces give way and wrap instead. */
+  .bar .who { display: flex; flex-direction: column; flex: 1 0 auto; min-width: min(120px, 40%); max-width: 70%; line-height: 1.2; }
+  .bar .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* width 0 + min-width 100%: the sub-line never widens the name column, it uses the width the column gets */
+  .bar .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 0; min-width: 100%; }
+  .bar .clock {
+    flex: none;
+    font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600;
+    padding: 2px 8px; border-radius: 6px; min-width: 64px; text-align: center;
+    color: var(--muted);
+  }
+  .bar .clock.active { background: var(--soft); color: var(--text); }
+  .bar.to-move { border-color: var(--accent); }
+
+  /* reuse chessground's piece images for small inline glyphs */
+  .cg-wrap.glyphs { position: static; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 2px; box-sizing: border-box; }
+  .cg-wrap.glyphs piece {
+    position: static; display: inline-block; width: 22px; height: 22px;
+    z-index: auto; pointer-events: auto; will-change: auto; flex: none;
+  }
+  .captured { flex: 0 1 auto; min-width: 0; justify-content: flex-end; }
+  .captured .cap { display: inline-flex; align-items: center; margin-left: 2px; }
+  .captured .cap .n { font-size: 11px; color: var(--muted); margin-left: -3px; }
+  .captured .balance { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 6px; }
+  @media (max-width: 420px) { .bar .captured.glyphs piece { width: 18px; height: 18px; } }
+
+  /* actions */
+  .actions { width: var(--bs); max-width: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+  .btn {
+    appearance: none; -webkit-appearance: none;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 8px; padding: 8px 12px; min-height: 40px; cursor: pointer;
+    text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    box-shadow: var(--shadow);
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .btn.attention { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn[hidden] { display: none; }
+
+  /* status */
+  .status {
+    width: var(--bs); max-width: 100%; min-height: 24px;
+    font-size: 13px; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline;
+  }
+  .status .result { color: var(--text); font-weight: 600; font-size: 15px; }
+  .status .err { color: var(--danger); }
+
+  /* panels */
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; box-shadow: var(--shadow); min-width: 0;
+  }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .total { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* move list */
+  .moves {
+    display: grid; grid-template-columns: max-content 1fr 1fr; gap: 1px 4px;
+    max-height: 38vh; overflow-y: auto; font-variant-numeric: tabular-nums;
+  }
+  @media (min-width: 760px) { .moves { max-height: 46vh; } }
+  .moves .num { color: var(--muted); padding: 4px 4px 4px 0; text-align: right; }
+  .moves .mv {
+    appearance: none; -webkit-appearance: none;
+    border: 0; background: transparent; color: var(--text); text-align: left;
+    padding: 4px 6px; border-radius: 6px; cursor: pointer; min-height: 28px;
+  }
+  @media (pointer: coarse) { .moves .mv { min-height: 40px; } }
+  .moves .mv:hover { background: var(--soft); }
+  .moves .mv.current { background: var(--accent); color: var(--accent-text); }
+  .moves .empty { grid-column: 1 / -1; color: var(--muted); padding: 4px 0; }
+
+  /* settings */
+  .settings { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+  .settings label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .settings select, .settings input {
+    appearance: auto; min-height: 40px; padding: 6px 8px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); max-width: 100%; width: 100%;
+    font-size: 16px;   /* below 16px iOS Safari zooms the page when the control is focused */
+  }
+  .settings input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+  .settings .full { grid-column: 1 / -1; }
+  .settings .row { display: flex; gap: 8px; align-items: flex-end; }
+  .settings .row label { flex: 1; }
+  .settings code {
+    display: block; font-size: 11px; word-break: break-all; color: var(--muted);
+    background: var(--bg); padding: 6px 8px; border-radius: 6px;
+  }
+  .settings .hint { grid-column: 1 / -1; margin: 0; font-size: 12px; color: var(--accent); }
+  [hidden] { display: none !important; }
+
+  /* promotion dialog */
+  .promo-overlay {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.35); z-index: 20; border-radius: 4px;
+  }
+  .cg-wrap.glyphs.promo {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px; position: relative;
+  }
+  .promo .choices { display: flex; gap: 6px; }
+  .cg-wrap.promo .choices button {
+    width: 64px; height: 64px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; padding: 0;
+  }
+  .cg-wrap.promo .choices button:hover { border-color: var(--accent); }
+  .cg-wrap.glyphs.promo piece { width: 52px; height: 52px; }
+  .promo .small { font-size: 12px; color: var(--muted); }
+
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  footer {
+    text-align: center; color: var(--muted); font-size: 12px;
+    padding: 0 max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OGE Chess</h1>
+  <span class="tag" id="engine-tag">offline · plays in your browser</span>
+</header>
+
+<main class="layout">
+  <section class="board-col">
+    <div class="bar" id="bar-top">
+      <div class="who"><span class="name" id="name-top">Bot</span><span class="sub" id="sub-top"></span></div>
+      <div class="captured cg-wrap glyphs" id="cap-top"></div>
+      <div class="clock" id="clock-top">00:00</div>
+    </div>
+
+    <div class="board-area" id="board-area">
+      <div id="board" class="cg-wrap"></div>
+      <div class="promo-overlay" id="promo-overlay" hidden>
+        <div class="cg-wrap glyphs promo" role="dialog" aria-label="Choose promotion piece">
+          <div class="choices" id="promo-choices"></div>
+          <div class="small">Tap a piece · Esc for queen</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bar" id="bar-bottom">
+      <div class="who"><span class="name" id="name-bottom">You</span><span class="sub" id="sub-bottom"></span></div>
+      <div class="captured cg-wrap glyphs" id="cap-bottom"></div>
+      <div class="clock" id="clock-bottom">00:00</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary" id="btn-new" type="button">New game</button>
+      <button class="btn" id="btn-start" type="button" hidden>Start</button>
+      <button class="btn" id="btn-undo" type="button">Undo</button>
+      <button class="btn" id="btn-flip" type="button">Flip board</button>
+      <button class="btn" id="btn-live" type="button" hidden>Back to live</button>
+      <a class="btn" id="lichess" href="https://lichess.org/analysis" target="_blank" rel="noopener">View on lichess</a>
+    </div>
+
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </section>
+
+  <aside class="side-col">
+    <div class="panel">
+      <h2>Moves <span class="total" id="total-time">· game time 00:00</span></h2>
+      <div class="moves" id="moves"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Settings</h2>
+      <form class="settings" id="settings" autocomplete="off">
+        <label>Mode
+          <select id="mode">
+            <option value="hvb">Human vs Bot</option>
+            <option value="bvb">Bot vs Bot</option>
+          </select>
+        </label>
+        <label class="hvb-only">Play as
+          <select id="human-color">
+            <option value="white">White</option>
+            <option value="black">Black</option>
+            <option value="random">Random</option>
+          </select>
+        </label>
+        <label class="hvb-only full">Bot strength <select id="level-bot"></select></label>
+        <label class="bvb-only">White bot <select id="level-white"></select></label>
+        <label class="bvb-only">Black bot <select id="level-black"></select></label>
+        <label>Variant
+          <select id="variant">
+            <option value="standard">Standard</option>
+            <option value="chess960">Chess960</option>
+          </select>
+        </label>
+        <div class="c960-only full row">
+          <label>Start position (0–959)
+            <input type="number" id="pos960" min="0" max="959" step="1" inputmode="numeric" enterkeyhint="done" value="518">
+          </label>
+          <button class="btn" id="btn-random960" type="button">Random</button>
+        </div>
+        <div class="c960-only full"><code id="fen960"></code></div>
+        <p class="hint" id="settings-hint" hidden>Changes take effect when you start a new game.</p>
+      </form>
+    </div>
+  </aside>
+</main>
+<footer>Board by <a href="https://github.com/lichess-org/chessground" target="_blank" rel="noopener">chessground</a>. Engine: <span id="engine-name">OGE</span>.</footer>
+
+<script src="vendor/chessground.min.js"></script>
+<script src="engine.js"></script>
+<script>
+(() => {
+  'use strict';
+  const O = globalThis.OGE;
+  const $ = id => document.getElementById(id);
+  const FILES = 'abcdefgh';
+  const PIECE_LETTER = ' PNBRQK';
+  const ROLE = [null, 'pawn', 'knight', 'bishop', 'rook', 'queen', 'king'];
+  const VALUE = [0, 1, 3, 3, 5, 9, 0];
+  const colorName = c => (c === O.WHITE ? 'white' : 'black');
+  const other = c => (c === 'white' ? 'black' : 'white');
+  const now = () => performance.now();
+  const START_CLOCK = 60000, MIN_CLOCK = 10000, INCREMENT = 600;
+
+  /* ---------------- Chess960 start positions (Scharnagl numbering) ---------------- */
+  const KNIGHT_PAIRS = [[0, 1], [0, 2], [0, 3], [0, 4], [1, 2], [1, 3], [1, 4], [2, 3], [2, 4], [3, 4]];
+  function chess960Fen(n) {
+    n = Math.max(0, Math.min(959, Math.floor(Number(n) || 0)));
+    const row = new Array(8).fill('');
+    let k = n;
+    row[1 + 2 * (k % 4)] = 'B'; k = Math.floor(k / 4);     // light-square bishop: b d f h
+    row[2 * (k % 4)] = 'B'; k = Math.floor(k / 4);         // dark-square bishop: a c e g
+    const q = k % 6; k = Math.floor(k / 6);
+    let free = row.map((p, i) => (p ? -1 : i)).filter(i => i >= 0);
+    row[free[q]] = 'Q';
+    free.splice(q, 1);
+    const [n1, n2] = KNIGHT_PAIRS[k];
+    row[free[n1]] = 'N'; row[free[n2]] = 'N';
+    free = free.filter((_, i) => i !== n1 && i !== n2);
+    row[free[0]] = 'R'; row[free[1]] = 'K'; row[free[2]] = 'R';
+    const white = row.join('');
+    return `${white.toLowerCase()}/pppppppp/8/8/8/8/PPPPPPPP/${white} w KQkq - 0 1`;
+  }
+
+  /* ---------------- Settings (what the next game uses) ---------------- */
+  const settings = {
+    mode: 'hvb', humanColor: 'white', variant: 'standard', startNumber: 518,
+    botLevel: Math.min(4, O.MAX_SKILL), whiteLevel: Math.min(4, O.MAX_SKILL), blackLevel: Math.min(4, O.MAX_SKILL),
+  };
+  function loadSettings() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('oge-settings') || '{}');
+      for (const k of Object.keys(settings)) if (k in saved) settings[k] = saved[k];
+    } catch (e) { /* storage unavailable */ }
+    for (const k of ['botLevel', 'whiteLevel', 'blackLevel']) settings[k] = clampLevel(settings[k]);
+    settings.startNumber = Math.max(0, Math.min(959, Math.floor(Number(settings.startNumber) || 0)));
+    if (!['hvb', 'bvb'].includes(settings.mode)) settings.mode = 'hvb';
+    if (!['white', 'black', 'random'].includes(settings.humanColor)) settings.humanColor = 'white';
+    if (!['standard', 'chess960'].includes(settings.variant)) settings.variant = 'standard';
+  }
+  function saveSettings() { try { localStorage.setItem('oge-settings', JSON.stringify(settings)); } catch (e) { /* ignore */ } }
+  function clampLevel(v) { v = Math.floor(Number(v)); return isNaN(v) ? Math.min(4, O.MAX_SKILL) : Math.max(0, Math.min(O.MAX_SKILL, v)); }
+  function levelLabel(n) {
+    if (n === 0) return 'Level 0 — Random (finds mate in 1)';
+    if (n === O.MAX_SKILL) return `Level ${n} — Full strength`;
+    return `Level ${n}`;
+  }
+
+  /* ---------------- Game state ---------------- */
+  const G = {
+    pos: new O.Position(),       // the live position; never used for viewing history
+    scratch: new O.Position(),   // for inspecting past positions
+    startFen: O.START_FEN, chess960: false,
+    mode: 'hvb',                 // the mode of THIS game; settings.mode is only what the next game will use
+    humanColor: 'white',
+    moves: [],                   // { move, uci, san, fen }  (fen = position after the move)
+    fens: [O.START_FEN],         // fens[i] = position after i plies
+    result: null,                // { score: '1-0', reason: 'Checkmate' }
+    view: null,                  // null = live, otherwise number of plies shown
+    orientation: 'white',
+    running: true,               // bot vs bot: started; human vs bot: always true
+    elapsed: { white: 0, black: 0 },
+    virtual: { white: START_CLOCK, black: START_CLOCK },
+    thinking: null,              // { color, level, startedAt }
+    info: null,                  // last "info depth ... score ..." of the thinking bot
+    pendingSettings: false,
+    lastTick: now(),
+  };
+  // Bot levels stay live (read at the bot's next move); the mode is fixed per game.
+  const levelFor = color => (G.mode === 'hvb' ? settings.botLevel : (color === 'white' ? settings.whiteLevel : settings.blackLevel));
+  const isLive = () => G.view === null;
+  const sideToMove = () => colorName(G.pos.side);
+  const humanTurn = () => G.mode === 'hvb' && !G.result && sideToMove() === G.humanColor;
+
+  /* ---------------- Engine client: Web Worker, main-thread fallback ---------------- */
+  // A search never legitimately takes this long (the engine's hard limit is under 10 s), and an
+  // "info string error" during a search not followed by a bestmove within ERROR_GRACE_MS means the search died.
+  const WATCHDOG_MS = 30000, ERROR_GRACE_MS = 2000, MAX_AUTO_RESTARTS = 3;
+  const engine = {
+    backend: null, ready: false, busy: false, wantMove: false, worker: null, main: null,
+    log: [], lastPosition: '', readyTimer: 0,
+    searchId: 0, watchdog: 0, errorTimer: 0, failures: 0, gaveUp: false,
+    start() {
+      let worker = null;
+      try { worker = new Worker('engine.js'); } catch (e) { worker = null; }
+      if (!worker) { this.fallback('Worker unavailable'); return; }
+      this.worker = worker; this.backend = 'worker';
+      worker.onmessage = e => { if (this.worker === worker) this.onLine(String(e.data)); };
+      worker.onerror = e => {
+        if (this.worker !== worker) return;
+        const msg = e && e.message ? e.message : 'worker error';
+        if (!this.ready) this.fallback(msg);
+        else this.restart('Engine error: ' + msg);
+      };
+      this.readyTimer = setTimeout(() => { if (!this.ready && this.worker === worker) this.fallback('worker timed out'); }, 6000);
+      this.send('uci');
+    },
+    fallback(reason) {
+      if (this.worker) { try { this.worker.terminate(); } catch (e) { /* ignore */ } this.worker = null; }
+      clearTimeout(this.readyTimer);
+      this.backend = 'main';
+      this.fallbackReason = reason;
+      this.startMain();
+    },
+    startMain() {
+      // Deliver output asynchronously so a bestmove handler never re-enters the engine from inside its own search.
+      const eng = new O.Engine(line => setTimeout(() => { if (this.main === eng) this.onLine(line); }, 0));
+      this.main = eng;
+      this.send('uci');
+    },
+    go(cmd) {
+      this.send(cmd);
+      this.busy = true;
+      const id = ++this.searchId;
+      clearTimeout(this.watchdog); clearTimeout(this.errorTimer);
+      this.watchdog = setTimeout(() => { if (this.busy && this.searchId === id) this.restart('Engine stopped responding'); }, WATCHDOG_MS);
+    },
+    searchEnded() {
+      clearTimeout(this.watchdog); clearTimeout(this.errorTimer);
+      this.busy = false; this.failures = 0;
+    },
+    // The search will never answer (exception inside the engine, dead worker): throw this engine away,
+    // start a fresh one and let the bot try again once it is ready. After a few failures in a row, wait
+    // for the user (New game, Undo, Resume) instead of looping.
+    restart(reason) {
+      clearTimeout(this.watchdog); clearTimeout(this.errorTimer); clearTimeout(this.readyTimer);
+      this.failures++;
+      this.gaveUp = this.failures >= MAX_AUTO_RESTARTS;
+      G.thinking = null; G.info = null;
+      this.busy = false; this.wantMove = false; this.ready = false;
+      if (this.worker) { try { this.worker.terminate(); } catch (e) { /* ignore */ } this.worker = null; }
+      if (this.main) { const old = this.main; this.main = null; old.command('quit').catch(() => {}); }
+      setError(`${reason}; the engine was restarted.` + (this.gaveUp ? ' Press New game or Undo to continue.' : ''));
+      if (this.backend === 'worker') this.start(); else this.startMain();
+      render();
+    },
+    resetFailures() { this.failures = 0; this.gaveUp = false; },
+    send(line) {
+      this.log.push('> ' + line); if (this.log.length > 400) this.log.splice(0, 100);
+      if (line.startsWith('position ')) this.lastPosition = line;
+      if (this.backend === 'worker' && this.worker) this.worker.postMessage(line);
+      else if (this.main) this.main.command(line).catch(err => { console.error(err); setError('Engine failed: ' + err.message); });
+    },
+    onLine(line) {
+      this.log.push('< ' + line); if (this.log.length > 400) this.log.splice(0, 100);
+      if (line === 'uciok') {
+        if (this.ready) return;
+        clearTimeout(this.readyTimer);
+        this.ready = true;
+        $('engine-tag').textContent = `${O.ENGINE_NAME} · ${this.backend === 'worker' ? 'web worker' : 'main thread'} · offline`;
+        this.send('ucinewgame');
+        this.send('setoption name UCI_Chess960 value ' + G.chess960);
+        render(); maybeBotMove();
+      } else if (line.startsWith('info string error')) {
+        // engine.js reports an exception in a command this way; if it was the search, no bestmove follows.
+        if (this.busy) {
+          const id = this.searchId;
+          clearTimeout(this.errorTimer);
+          this.errorTimer = setTimeout(() => { if (this.busy && this.searchId === id) this.restart('Engine ' + line.slice(12)); }, ERROR_GRACE_MS);
+        }
+      } else if (line.startsWith('info ')) {
+        if (!G.thinking) return;
+        const d = /\bdepth (\d+)/.exec(line), s = /\bscore (cp|mate) (-?\d+)/.exec(line), mp = /\bmultipv (\d+)/.exec(line);
+        if (d && s && (!mp || mp[1] === '1')) {
+          G.info = { color: G.thinking.color, level: G.thinking.level, depth: +d[1], kind: s[1], value: +s[2] };
+          renderStatus();
+        }
+      } else if (line.startsWith('bestmove')) {
+        onBestmove(line.split(/\s+/)[1]);
+      }
+    },
+  };
+
+  function onBestmove(uci) {
+    const t = G.thinking;
+    G.thinking = null; engine.searchEnded();
+    if (!t) {                     // a search we cancelled: discard, then see if a bot should move now
+      if (engine.wantMove) { engine.wantMove = false; maybeBotMove(); }
+      render();
+      return;
+    }
+    const used = now() - t.startedAt;
+    G.virtual[t.color] = Math.max(MIN_CLOCK, Math.round(G.virtual[t.color] - used));
+    if (G.result || sideToMove() !== t.color) { render(); return; }
+    const move = G.pos.parseMove(uci);
+    if (move === O.NO_MOVE) { setError(`Engine sent an illegal move (${uci})`); render(); return; }
+    applyMove(move);
+  }
+
+  function cancelThinking() {
+    if (G.thinking) { G.thinking = null; engine.send('stop'); }
+    engine.wantMove = false;
+  }
+
+  function positionCommand() {
+    const moves = G.moves.map(m => m.uci).join(' ');
+    const base = G.startFen === O.START_FEN ? 'position startpos' : 'position fen ' + G.startFen;
+    return moves ? `${base} moves ${moves}` : base;
+  }
+
+  function maybeBotMove() {
+    if (!engine.ready || engine.gaveUp || G.result) return;
+    const side = sideToMove();
+    const botTurn = G.mode === 'bvb' ? G.running : side !== G.humanColor;
+    if (!botTurn || G.thinking) return;
+    if (engine.busy) { engine.wantMove = true; return; }
+    const level = levelFor(side);
+    engine.send('setoption name UCI_Chess960 value ' + G.chess960);
+    engine.send('setoption name Skill_Level value ' + level);
+    engine.send(positionCommand());
+    engine.go(`go wtime ${G.virtual.white} btime ${G.virtual.black} winc ${INCREMENT} binc ${INCREMENT}`);
+    G.thinking = { color: side, level, startedAt: now() };
+    G.info = null;
+    render();
+  }
+
+  /* ---------------- Chess helpers built on OGE ---------------- */
+  function castleRookSquare(pos, move) {
+    const to = O.moveTo(move);
+    const idx = ((to & 7) === 6 ? 0 : 1) + (pos.side === O.WHITE ? 0 : 2);
+    return pos.castleRook[idx];
+  }
+
+  function sanOf(pos, move) {
+    const from = O.moveFrom(move), to = O.moveTo(move), flag = O.moveFlag(move), promo = O.movePromo(move);
+    const type = O.typeOf(pos.board[from]);
+    let s;
+    if (flag === O.FLAG_CASTLE) {
+      s = (to & 7) === 6 ? 'O-O' : 'O-O-O';
+    } else {
+      const capture = pos.board[to] !== 0 || flag === O.FLAG_EP;
+      if (type === O.PAWN) {
+        s = (capture ? FILES[from & 7] + 'x' : '') + O.squareName(to) + (promo ? '=' + PIECE_LETTER[promo] : '');
+      } else {
+        s = PIECE_LETTER[type];
+        const others = pos.legalMoves().filter(m => m !== move && O.moveTo(m) === to && O.moveFrom(m) !== from &&
+          O.moveFlag(m) !== O.FLAG_CASTLE && O.typeOf(pos.board[O.moveFrom(m)]) === type);
+        if (others.length) {
+          const sameFile = others.some(m => (O.moveFrom(m) & 7) === (from & 7));
+          const sameRank = others.some(m => (O.moveFrom(m) >> 3) === (from >> 3));
+          if (!sameFile) s += FILES[from & 7];
+          else if (!sameRank) s += String(1 + (from >> 3));
+          else s += O.squareName(from);
+        }
+        if (capture) s += 'x';
+        s += O.squareName(to);
+      }
+    }
+    if (!pos.make(move)) return s;
+    if (pos.inCheck()) s += pos.legalMoves().length === 0 ? '#' : '+';
+    pos.unmake();
+    return s;
+  }
+
+  function destsMap(pos) {
+    const dests = new Map();
+    const add = (a, b) => { const arr = dests.get(a) || []; if (!arr.includes(b)) arr.push(b); dests.set(a, arr); };
+    for (const m of pos.legalMoves()) {
+      const from = O.squareName(O.moveFrom(m));
+      if (O.moveFlag(m) === O.FLAG_CASTLE) {
+        add(from, O.squareName(castleRookSquare(pos, m)));           // king onto its rook
+        if (O.moveTo(m) !== O.moveFrom(m)) add(from, O.squareName(O.moveTo(m)));   // king onto its destination
+      } else add(from, O.squareName(O.moveTo(m)));
+    }
+    return dests;
+  }
+
+  // Legal moves matching a drag from orig to dest. Normal moves win over castling when both exist
+  // (Chess960 king next to its destination); castling is then done by moving the king onto the rook.
+  function matchingMoves(pos, orig, dest) {
+    const from = O.parseSquare(orig), to = O.parseSquare(dest);
+    const legal = pos.legalMoves();
+    const normal = legal.filter(m => O.moveFrom(m) === from && O.moveTo(m) === to && O.moveFlag(m) !== O.FLAG_CASTLE);
+    if (normal.length) return normal;
+    return legal.filter(m => O.moveFrom(m) === from && O.moveFlag(m) === O.FLAG_CASTLE &&
+      (O.moveTo(m) === to || castleRookSquare(pos, m) === to));
+  }
+
+  function materialCounts(board) {
+    const c = { white: [0, 0, 0, 0, 0, 0, 0], black: [0, 0, 0, 0, 0, 0, 0] };
+    for (let sq = 0; sq < 64; sq++) {
+      const p = board[sq];
+      if (p) c[colorName(O.colorOf(p))][O.typeOf(p)]++;
+    }
+    return c;
+  }
+  // Pieces each side has captured in the first `plies` moves, taken from the move history so that promotions
+  // are right (a promoted pawn is not a captured pawn; a captured promoted queen is a captured queen).
+  // The material balance comes from the board at that point.
+  function capturedPieces(plies) {
+    const pos = G.scratch;
+    pos.setFen(G.startFen); pos.chess960 = G.chess960;
+    const taken = { white: [0, 0, 0, 0, 0, 0, 0], black: [0, 0, 0, 0, 0, 0, 0] };   // taken.white[t] = black pieces of type t
+    for (const m of G.moves.slice(0, plies)) {
+      const flag = O.moveFlag(m.move);
+      if (flag !== O.FLAG_CASTLE) {                    // a Chess960 king may "land" on its own rook
+        const victim = flag === O.FLAG_EP ? O.PAWN : O.typeOf(pos.board[O.moveTo(m.move)]);
+        if (victim) taken[colorName(pos.side)][victim]++;
+      }
+      if (pos.histPly > 1900) pos.setFen(pos.fen());  // same bound on the undo stack as the live position
+      pos.make(m.move);
+    }
+    const out = { white: [], black: [], balance: 0 };    // out.white = pieces White has captured (black pieces)
+    for (const color of ['white', 'black']) {
+      for (const t of [O.PAWN, O.KNIGHT, O.BISHOP, O.ROOK, O.QUEEN]) if (taken[color][t]) out[color].push({ type: t, count: taken[color][t] });
+    }
+    const cur = materialCounts(pos.board);
+    for (const t of [O.PAWN, O.KNIGHT, O.BISHOP, O.ROOK, O.QUEEN]) out.balance += VALUE[t] * (cur.white[t] - cur.black[t]);
+    return out;
+  }
+
+  const repetitionKey = fen => fen.split(' ').slice(0, 4).join(' ');
+  function repetitions(fen) {
+    const key = repetitionKey(fen);
+    let n = 0;
+    for (const f of G.fens) if (repetitionKey(f) === key) n++;
+    return n;
+  }
+
+  function checkGameEnd() {
+    const pos = G.pos;
+    const mover = other(sideToMove());
+    const draw = reason => ({ score: '1/2-1/2', reason });
+    if (pos.legalMoves().length === 0) {
+      G.result = pos.inCheck() ? { score: mover === 'white' ? '1-0' : '0-1', reason: 'Checkmate' } : draw('Stalemate');
+    } else if (pos.halfmove >= 100) G.result = draw('Fifty-move rule');
+    else if (pos.insufficientMaterial()) G.result = draw('Insufficient material');
+    else if (repetitions(pos.fen()) >= 3) G.result = draw('Threefold repetition');
+    if (G.result) { G.running = false; cancelThinking(); }
+  }
+
+  /* ---------------- Game actions ---------------- */
+  function applyMove(move) {
+    tick();                       // credit the time up to now to the side that is moving
+    const pos = G.pos;
+    const san = sanOf(pos, move);
+    const uci = pos.moveToUci(move);
+    const from = O.moveFrom(move), to = O.moveTo(move);
+    if (!pos.make(move)) return false;
+    pos.gamePly++;
+    if (pos.histPly > 1900) pos.setFen(pos.fen());     // keep the undo stack bounded in very long games
+    const fen = pos.fen();
+    G.moves.push({ move, uci, san, fen, from, to });
+    G.fens.push(fen);
+    G.view = null;
+    hidePromotion();
+    checkGameEnd();
+    render();
+    maybeBotMove();
+    return true;
+  }
+
+  function rebuildPosition() {
+    const pos = G.pos;
+    pos.setFen(G.startFen); pos.chess960 = G.chess960;
+    G.fens = [pos.fen()];         // same castling notation (Shredder letters in Chess960) as the FENs after each move
+    for (const m of G.moves) { pos.make(m.move); pos.gamePly++; G.fens.push(m.fen); }
+    G.result = null; G.view = null;
+  }
+
+  function newGame() {
+    cancelThinking(); hidePromotion();
+    engine.resetFailures();
+    G.mode = settings.mode;
+    G.chess960 = settings.variant === 'chess960';
+    G.startFen = G.chess960 ? chess960Fen(settings.startNumber) : O.START_FEN;
+    G.pos.setFen(G.startFen); G.pos.chess960 = G.chess960;
+    G.moves = []; G.fens = [G.pos.fen()]; G.result = null; G.view = null;
+    G.humanColor = settings.humanColor === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : settings.humanColor;
+    G.orientation = G.mode === 'hvb' ? G.humanColor : 'white';
+    G.running = G.mode === 'hvb';
+    G.elapsed = { white: 0, black: 0 };
+    G.virtual = { white: START_CLOCK, black: START_CLOCK };
+    G.info = null; G.pendingSettings = false; G.lastTick = now();
+    errorText = '';
+    if (engine.ready) { engine.send('ucinewgame'); engine.send('setoption name UCI_Chess960 value ' + G.chess960); }
+    render();
+    maybeBotMove();
+  }
+
+  function undo() {
+    if (!G.moves.length) return;
+    tick();
+    cancelThinking(); hidePromotion();
+    engine.resetFailures();
+    if (G.mode === 'bvb') {
+      G.running = false;
+      G.moves.pop(); rebuildPosition();
+    } else {
+      do { G.moves.pop(); rebuildPosition(); } while (G.moves.length && sideToMove() !== G.humanColor);
+    }
+    render();
+    maybeBotMove();
+  }
+
+  function toggleRunning() {
+    if (G.mode !== 'bvb' || G.result) return;
+    tick();
+    G.running = !G.running;
+    if (G.running) engine.resetFailures();
+    if (!G.running) cancelThinking();
+    G.lastTick = now();
+    render();
+    maybeBotMove();
+  }
+
+  function setView(ply) {
+    if (ply === null || ply >= G.moves.length) G.view = null;
+    else G.view = Math.max(0, ply);
+    render();
+  }
+
+  function playUci(uci) {
+    if (!isLive() || G.result) return false;
+    if (G.mode === 'hvb' ? !humanTurn() : (G.running || G.thinking)) return false;
+    const move = G.pos.parseMove(uci);
+    if (move === O.NO_MOVE) return false;
+    applyMove(move);
+    return G.moves[G.moves.length - 1].san;
+  }
+
+  /* ---------------- Promotion dialog ---------------- */
+  let promoChoices = null;
+  function showPromotion(cands) {
+    promoChoices = cands;
+    const color = sideToMove();
+    const box = $('promo-choices');
+    box.innerHTML = '';
+    for (const t of [O.QUEEN, O.ROOK, O.BISHOP, O.KNIGHT]) {
+      const cand = cands.find(m => O.movePromo(m) === t);
+      if (!cand) continue;
+      const b = document.createElement('button');
+      b.type = 'button'; b.setAttribute('aria-label', ROLE[t]);
+      b.innerHTML = `<piece class="${color} ${ROLE[t]}"></piece>`;
+      b.addEventListener('click', () => { promoChoices = null; applyMove(cand); });
+      box.appendChild(b);
+    }
+    $('promo-overlay').hidden = false;
+  }
+  function hidePromotion() { $('promo-overlay').hidden = true; promoChoices = null; }
+  function cancelPromotion() {
+    if (!promoChoices) return;
+    const q = promoChoices.find(m => O.movePromo(m) === O.QUEEN) || promoChoices[0];
+    promoChoices = null;
+    applyMove(q);
+  }
+  $('promo-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) cancelPromotion(); });
+
+  /* ---------------- Board ---------------- */
+  const cg = Chessground($('board'), {
+    fen: G.startFen,
+    orientation: 'white',
+    coordinates: true,
+    // blockTouchScroll stays false (default): a swipe that starts on empty squares scrolls the page,
+    // touches on pieces (or with a piece selected) still drag/select.
+    animation: { enabled: true, duration: 150 },
+    highlight: { lastMove: true, check: true },
+    movable: { free: false, color: 'white', showDests: true, events: { after: onUserMove } },
+    draggable: { enabled: true, showGhost: true },
+    selectable: { enabled: true },
+    premovable: { enabled: false },
+    drawable: { enabled: false },
+  });
+
+  function onUserMove(orig, dest) {
+    if (!humanTurn() || !isLive()) { renderBoard(); return; }
+    const cands = matchingMoves(G.pos, orig, dest);
+    if (!cands.length) { renderBoard(); return; }
+    if (O.movePromo(cands[0])) { showPromotion(cands); return; }
+    applyMove(cands[0]);
+  }
+
+  function renderBoard() {
+    const live = isLive();
+    const fen = live ? G.pos.fen() : G.fens[G.view];
+    const last = live ? G.moves[G.moves.length - 1] : (G.view > 0 ? G.moves[G.view - 1] : null);
+    let turnColor, inCheck;
+    if (live) { turnColor = sideToMove(); inCheck = G.pos.inCheck(); }
+    else { G.scratch.setFen(fen); turnColor = colorName(G.scratch.side); inCheck = G.scratch.inCheck(); }
+    const canMove = live && humanTurn() && !promoChoices;
+    cg.set({
+      fen, orientation: G.orientation, turnColor,
+      check: inCheck,
+      lastMove: last ? [O.squareName(last.from), O.squareName(last.to)] : undefined,
+      movable: { color: canMove ? G.humanColor : undefined, dests: canMove ? destsMap(G.pos) : new Map() },
+    });
+  }
+
+  /* ---------------- Rendering ---------------- */
+  let errorText = '';
+  function setError(msg) { errorText = msg; renderStatus(); }
+
+  function fmtTime(ms) {
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
+    return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  }
+  function fmtScore(info) {
+    if (info.kind === 'mate') return info.value > 0 ? `M${info.value}` : `-M${Math.abs(info.value)}`;
+    const v = info.value / 100;
+    return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2);
+  }
+
+  function clockSide() {
+    if (G.result || !engine.ready) return null;
+    if (G.mode === 'bvb' && !G.running) return null;
+    return sideToMove();
+  }
+
+  function playerName(color) {
+    if (G.mode === 'hvb' && color === G.humanColor) return 'You';
+    return `Bot · Level ${levelFor(color)}`;
+  }
+
+  function renderBar(where, color, cap) {
+    const bar = $('bar-' + where);
+    $('name-' + where).textContent = playerName(color);
+    const sub = [color === 'white' ? 'White' : 'Black'];
+    const lvl = levelFor(color);
+    if (!(G.mode === 'hvb' && color === G.humanColor)) { if (lvl === 0) sub.push('random'); else if (lvl === O.MAX_SKILL) sub.push('full strength'); }
+    if (!G.result && sideToMove() === color) sub.push(G.thinking && G.thinking.color === color ? 'thinking…' : (clockSide() ? 'to move' : (G.mode === 'bvb' ? 'paused' : 'to move')));
+    $('sub-' + where).textContent = sub.join(' · ');
+    bar.classList.toggle('to-move', !G.result && sideToMove() === color);
+    const box = $('cap-' + where);
+    let html = '';
+    for (const c of cap[color]) html += `<span class="cap"><piece class="${other(color)} ${ROLE[c.type]}"></piece>${c.count > 1 ? `<span class="n">×${c.count}</span>` : ''}</span>`;
+    const bal = color === 'white' ? cap.balance : -cap.balance;
+    if (bal > 0) html += `<span class="balance">+${bal}</span>`;
+    box.innerHTML = html;
+  }
+
+  function renderClocks() {
+    const top = other(G.orientation), bottom = G.orientation, active = clockSide();
+    for (const [where, color] of [['top', top], ['bottom', bottom]]) {
+      const el = $('clock-' + where);
+      el.textContent = fmtTime(G.elapsed[color]);
+      el.classList.toggle('active', active === color);
+    }
+    $('total-time').textContent = '· game time ' + fmtTime(G.elapsed.white + G.elapsed.black);
+  }
+
+  function renderMoves() {
+    const box = $('moves');
+    const current = G.view === null ? G.moves.length : G.view;
+    if (!G.moves.length) { box.innerHTML = '<div class="empty">No moves yet.</div>'; return; }
+    let html = '';
+    G.scratch.setFen(G.startFen);
+    const blackStarts = G.scratch.side === O.BLACK;
+    let moveNo = G.scratch.fullmove;
+    if (blackStarts) html += `<span class="num">${moveNo}.</span><span></span>`;
+    G.moves.forEach((m, i) => {
+      const white = blackStarts ? i % 2 === 1 : i % 2 === 0;
+      if (white) { html += `<span class="num">${moveNo}.</span>`; }
+      html += `<button type="button" class="mv${i + 1 === current ? ' current' : ''}" data-ply="${i + 1}">${m.san}</button>`;
+      if (!white) moveNo++;
+    });
+    if ((G.moves.length + (blackStarts ? 1 : 0)) % 2 === 1) html += '<span></span>';
+    box.innerHTML = html;
+    const cur = box.querySelector('.mv.current');
+    if (cur) {
+      const top = cur.offsetTop - box.offsetTop;
+      if (top < box.scrollTop || top + cur.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = top - box.clientHeight / 2;
+    }
+  }
+  $('moves').addEventListener('click', e => {
+    const b = e.target.closest('.mv');
+    if (b) setView(+b.dataset.ply);
+  });
+
+  function lichessUrl(plies) {
+    const list = G.moves.slice(0, plies);
+    if (!list.length) {
+      const fen = G.startFen.replace(/ /g, '_');
+      return `https://lichess.org/analysis/${G.chess960 ? 'chess960/' : ''}${fen}`;
+    }
+    G.scratch.setFen(G.startFen);
+    const blackStarts = G.scratch.side === O.BLACK;
+    let moveNo = G.scratch.fullmove, text = blackStarts ? `${moveNo}... ` : '';
+    list.forEach((m, i) => {
+      const white = blackStarts ? i % 2 === 1 : i % 2 === 0;
+      if (white) text += `${moveNo}. `;
+      text += m.san + ' ';
+      if (!white) moveNo++;
+    });
+    let pgn = text.trim();
+    if (G.chess960) pgn = `[Variant "Chess960"]\n[FEN "${G.startFen}"]\n[SetUp "1"]\n\n${pgn}`;
+    return 'https://lichess.org/analysis/pgn/' + encodeURIComponent(pgn);
+  }
+
+  function renderStatus() {
+    const box = $('status');
+    let html = '';
+    if (errorText) html += `<span class="err">${escapeHtml(errorText)}</span>`;
+    if (G.result) {
+      const winner = G.result.score === '1-0' ? 'White wins' : G.result.score === '0-1' ? 'Black wins' : 'Draw';
+      html += `<span class="result">${G.result.reason} — ${winner} · ${G.result.score}</span>`;
+    }
+    if (!engine.ready) html += '<span>Starting engine…</span>';
+    else if (G.info) {
+      const who = `${G.info.color === 'white' ? 'White' : 'Black'} bot (level ${G.info.level})`;
+      html += `<span>${who}: depth ${G.info.depth} · ${fmtScore(G.info)}</span>`;
+    } else if (G.thinking) html += `<span>${G.thinking.color === 'white' ? 'White' : 'Black'} bot is thinking…</span>`;
+    if (!isLive()) html += `<span>Viewing move ${Math.ceil(G.view / 2) || 0} of ${Math.ceil(G.moves.length / 2)} — board is read-only.</span>`;
+    box.innerHTML = html;
+  }
+  const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function renderActions() {
+    const bvb = G.mode === 'bvb';
+    const start = $('btn-start');
+    start.hidden = !bvb;
+    start.textContent = G.running ? 'Pause' : (G.moves.length ? 'Resume' : 'Start');
+    start.disabled = !!G.result || !engine.ready;
+    start.classList.toggle('primary', bvb && !G.running && !G.result);
+    $('btn-new').classList.toggle('primary', !(bvb && !G.running && !G.result));
+    $('btn-new').classList.toggle('attention', G.pendingSettings);
+    $('btn-undo').disabled = !G.moves.length;
+    $('btn-live').hidden = isLive();
+    $('lichess').href = lichessUrl(G.view === null ? G.moves.length : G.view);
+  }
+
+  function renderSettings() {
+    $('mode').value = settings.mode;
+    $('human-color').value = settings.humanColor;
+    $('level-bot').value = String(settings.botLevel);
+    $('level-white').value = String(settings.whiteLevel);
+    $('level-black').value = String(settings.blackLevel);
+    $('variant').value = settings.variant;
+    const inp = $('pos960');
+    if (document.activeElement !== inp) {      // never overwrite what the user is typing
+      if (inp.value !== String(settings.startNumber)) inp.value = String(settings.startNumber);
+      inp.removeAttribute('aria-invalid');
+    }
+    $('fen960').textContent = chess960Fen(settings.startNumber);
+    const hvb = settings.mode === 'hvb', c960 = settings.variant === 'chess960';
+    document.querySelectorAll('.hvb-only').forEach(el => { el.hidden = !hvb; });
+    document.querySelectorAll('.bvb-only').forEach(el => { el.hidden = hvb; });
+    document.querySelectorAll('.c960-only').forEach(el => { el.hidden = !c960; });
+    $('settings-hint').hidden = !G.pendingSettings;
+  }
+
+  function render() {
+    renderSettings();
+    renderBoard();
+    const cap = capturedPieces(G.view === null ? G.moves.length : G.view);
+    renderBar('top', other(G.orientation), cap);
+    renderBar('bottom', G.orientation, cap);
+    renderClocks();
+    renderMoves();
+    renderActions();
+    renderStatus();
+  }
+
+  function tick() {
+    const t = now();
+    const side = clockSide();
+    if (side) G.elapsed[side] += t - G.lastTick;
+    G.lastTick = t;
+    renderClocks();
+  }
+
+  /* ---------------- UI wiring ---------------- */
+  function fillLevels(sel) {
+    for (let i = 0; i <= O.MAX_SKILL; i++) {
+      const o = document.createElement('option');
+      o.value = String(i); o.textContent = levelLabel(i);
+      sel.appendChild(o);
+    }
+  }
+  fillLevels($('level-bot')); fillLevels($('level-white')); fillLevels($('level-black'));
+
+  // Mode, colour and variant apply to the next game; if no move has been played yet, start it right away.
+  function gameSettingsChanged() {
+    saveSettings();
+    if (!G.moves.length) newGame();
+    else { G.pendingSettings = true; render(); }
+  }
+  $('mode').addEventListener('change', e => { settings.mode = e.target.value; gameSettingsChanged(); });
+  $('human-color').addEventListener('change', e => { settings.humanColor = e.target.value; gameSettingsChanged(); });
+  $('variant').addEventListener('change', e => { settings.variant = e.target.value; gameSettingsChanged(); });
+  // The start position is applied when the number is committed (Enter / Done / leaving the field), not on every
+  // keystroke: typing "960" must not start games at 9 and 96 on the way. Out-of-range input is flagged while typing
+  // and snaps back to the position in use when committed.
+  const pos960Valid = inp => inp.value.trim() !== '' && !inp.validity.badInput && Number.isInteger(Number(inp.value)) &&
+    Number(inp.value) >= 0 && Number(inp.value) <= 959;
+  function commitPos960() {
+    const inp = $('pos960');
+    inp.removeAttribute('aria-invalid');
+    if (!pos960Valid(inp)) { inp.value = String(settings.startNumber); return; }
+    const v = Number(inp.value);
+    inp.value = String(v);
+    if (v !== settings.startNumber) { settings.startNumber = v; gameSettingsChanged(); }
+  }
+  $('pos960').addEventListener('input', e => {
+    const inp = e.target, bad = inp.validity.badInput || (inp.value.trim() !== '' && !pos960Valid(inp));
+    if (bad) inp.setAttribute('aria-invalid', 'true'); else inp.removeAttribute('aria-invalid');
+  });
+  $('pos960').addEventListener('change', commitPos960);
+  $('pos960').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commitPos960(); e.target.blur(); } });
+  $('pos960').addEventListener('blur', () => render());
+  // The settings live in a <form> (mobile keyboards get a Go/Done key); an implicit submit must never reload the page.
+  $('settings').addEventListener('submit', e => {
+    e.preventDefault();
+    commitPos960();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  });
+  $('btn-random960').addEventListener('click', () => { settings.startNumber = Math.floor(Math.random() * 960); gameSettingsChanged(); });
+  // Strength applies at the bot's next move.
+  $('level-bot').addEventListener('change', e => { settings.botLevel = clampLevel(e.target.value); saveSettings(); render(); });
+  $('level-white').addEventListener('change', e => { settings.whiteLevel = clampLevel(e.target.value); saveSettings(); render(); });
+  $('level-black').addEventListener('change', e => { settings.blackLevel = clampLevel(e.target.value); saveSettings(); render(); });
+
+  $('btn-new').addEventListener('click', newGame);
+  $('btn-undo').addEventListener('click', undo);
+  $('btn-flip').addEventListener('click', () => { G.orientation = other(G.orientation); render(); });
+  $('btn-live').addEventListener('click', () => setView(null));
+  $('btn-start').addEventListener('click', toggleRunning);
+
+  document.addEventListener('keydown', e => {
+    if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+    if (e.key === 'Escape' && promoChoices) { cancelPromotion(); return; }
+    if (!G.moves.length) return;
+    const cur = G.view === null ? G.moves.length : G.view;
+    if (e.key === 'ArrowLeft') { setView(Math.max(0, cur - 1)); e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { setView(cur + 1); e.preventDefault(); }
+    else if (e.key === 'Home') { setView(0); e.preventDefault(); }
+    else if (e.key === 'End') { setView(null); e.preventDefault(); }
+  });
+
+  /* ---------------- Boot ---------------- */
+  $('engine-name').textContent = O.ENGINE_NAME;
+  loadSettings();
+  newGame();
+  engine.start();
+  setInterval(tick, 250);
+
+  // Small API for tests and tinkering.
+  globalThis.app = {
+    playUci,
+    newGame(opts) {
+      if (opts) {
+        if (opts.mode) settings.mode = opts.mode;
+        if (opts.humanColor) settings.humanColor = opts.humanColor;
+        if (opts.variant) settings.variant = opts.variant;
+        if (opts.startNumber !== undefined) settings.startNumber = Math.max(0, Math.min(959, Math.floor(Number(opts.startNumber) || 0)));
+        if (opts.botLevel !== undefined) settings.botLevel = clampLevel(opts.botLevel);
+        if (opts.whiteLevel !== undefined) settings.whiteLevel = clampLevel(opts.whiteLevel);
+        if (opts.blackLevel !== undefined) settings.blackLevel = clampLevel(opts.blackLevel);
+        saveSettings();
+      }
+      newGame();
+    },
+    start() { if (G.mode === 'bvb' && !G.running) toggleRunning(); },
+    pause() { if (G.mode === 'bvb' && G.running) toggleRunning(); },
+    undo, flip() { G.orientation = other(G.orientation); render(); }, view: setView,
+    legalUcis() { return G.pos.legalMoves().map(m => G.pos.moveToUci(m)); },
+    legalMoves() {
+      return G.pos.legalMoves().map(m => ({ uci: G.pos.moveToUci(m), san: sanOf(G.pos, m), from: O.squareName(O.moveFrom(m)),
+        to: O.squareName(O.moveTo(m)), castle: O.moveFlag(m) === O.FLAG_CASTLE, promo: O.movePromo(m) }));
+    },
+    san(fen, uci, chess960 = false) {     // SAN of a UCI move in any position (for tests)
+      const p = new O.Position(); p.setFen(fen); p.chess960 = chess960;
+      const m = p.parseMove(uci);
+      return m === O.NO_MOVE ? null : sanOf(p, m);
+    },
+    chess960Fen,
+    lichessUrl: () => lichessUrl(G.view === null ? G.moves.length : G.view),
+    state() {
+      return {
+        mode: G.mode, settingsMode: settings.mode, variant: settings.variant, startNumber: settings.startNumber, startFen: G.startFen,
+        chess960: G.chess960, humanColor: G.humanColor, levels: { white: levelFor('white'), black: levelFor('black') },
+        fen: G.pos.fen(), sideToMove: sideToMove(), moves: G.moves.map(m => m.san), ucis: G.moves.map(m => m.uci),
+        result: G.result, view: G.view, running: G.running, thinking: !!G.thinking, engineBusy: engine.busy,
+        engineReady: engine.ready, engineBackend: engine.backend, fallbackReason: engine.fallbackReason || null,
+        elapsed: { ...G.elapsed }, virtual: { ...G.virtual }, orientation: G.orientation,
+        lichessUrl: lichessUrl(G.view === null ? G.moves.length : G.view), captured: capturedPieces(G.moves.length),
+        lastPositionCmd: engine.lastPosition, info: G.info, error: errorText, boardFen: cg.getFen(),
+        promotionPending: !!promoChoices,
+      };
+    },
+    engineLog: () => engine.log.slice(),
+  };
+})();
+</script>
+</body>
+</html>
