@@ -88,7 +88,7 @@
     min-height: 44px;
   }
   /* The name (with the bot level) keeps its full width; the captured pieces give way and wrap instead. */
-  .bar .who { display: flex; flex-direction: column; flex: 1 0 auto; min-width: 0; max-width: 70%; line-height: 1.2; }
+  .bar .who { display: flex; flex-direction: column; flex: 1 0 auto; min-width: min(120px, 40%); max-width: 70%; line-height: 1.2; }
   .bar .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* width 0 + min-width 100%: the sub-line never widens the name column, it uses the width the column gets */
   .bar .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 0; min-width: 100%; }
@@ -111,6 +111,7 @@
   .captured .cap { display: inline-flex; align-items: center; margin-left: 2px; }
   .captured .cap .n { font-size: 11px; color: var(--muted); margin-left: -3px; }
   .captured .balance { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 6px; }
+  @media (max-width: 420px) { .bar .captured.glyphs piece { width: 18px; height: 18px; } }
 
   /* actions */
   .actions { width: var(--bs); max-width: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
