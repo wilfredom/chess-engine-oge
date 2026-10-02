@@ -217,6 +217,16 @@ class Position {
     this.setFen(START_FEN);
   }
 
+  /* The undo stacks start at MAX_HISTORY entries and double when a very
+     long game (plus search depth) needs more. */
+  growHistory(needed) {
+    let size = this.uMove.length;
+    while (size < needed) size *= 2;
+    const grow = a => { const b = new a.constructor(size); b.set(a); return b; };
+    this.uMove = grow(this.uMove); this.uCaptured = grow(this.uCaptured); this.uCastling = grow(this.uCastling);
+    this.uEp = grow(this.uEp); this.uHalfmove = grow(this.uHalfmove); this.uHashLo = grow(this.uHashLo); this.uHashHi = grow(this.uHashHi);
+  }
+
   /* ---- FEN -------------------------------------------------------
      Accepts standard FEN, X-FEN (KQkq with rooks anywhere) and
      Shredder-FEN (castling rights given as rook files, e.g. "HAha"). */
@@ -254,7 +264,7 @@ class Position {
       } else if (lower >= 'a' && lower <= 'h') {
         rookFile = lower.charCodeAt(0) - 97;
       }
-      if (rookFile < 0 || rankOf(king) !== rank) continue;
+      if (rookFile < 0 || rankOf(king) !== rank || this.board[rank * 8 + rookFile] !== (color | ROOK)) continue;
       const bit = rookFile > fileOf(king) ? 0 : 1;
       const idx = bit + (color === WHITE ? 0 : 2);
       this.castling |= 1 << idx;
@@ -264,8 +274,14 @@ class Position {
     for (let i = 0; i < 4; i++) if (this.castleRook[i] >= 0) this.castleMask[this.castleRook[i]] &= ~(1 << i);
     this.castleMask[this.kingSq[0]] &= ~3;
     this.castleMask[this.kingSq[1]] &= ~12;
-    this.ep = parts[3] && parts[3] !== '-' ? parseSquare(parts[3]) : -1;
-    if (this.ep >= 0 && !this.epCapturePossible()) this.ep = -1;
+    // en passant: must be an empty square on the 6th (White to move) or 3rd rank,
+    // right behind an enemy pawn, and actually capturable by one of our pawns
+    this.ep = /^[a-h][36]$/.test(parts[3] || '') ? parseSquare(parts[3]) : -1;
+    if (this.ep >= 0) {
+      const pawnSq = this.ep + (this.side === WHITE ? -8 : 8);
+      const okRank = rankOf(this.ep) === (this.side === WHITE ? 5 : 2);
+      if (!okRank || this.board[this.ep] !== EMPTY || this.board[pawnSq] !== ((this.side ^ 8) | PAWN) || !this.epCapturePossible()) this.ep = -1;
+    }
     this.halfmove = parts[4] ? parseInt(parts[4], 10) || 0 : 0;
     this.fullmove = parts[5] ? parseInt(parts[5], 10) || 1 : 1;
     this.histPly = 0;
@@ -360,6 +376,7 @@ class Position {
     const from = moveFrom(move), to = moveTo(move), flag = moveFlag(move);
     const piece = b[from];
     const h = this.histPly;
+    if (h + 1 >= this.uMove.length) this.growHistory(h + 2);
     this.uMove[h] = move;
     this.uCastling[h] = this.castling;
     this.uEp[h] = this.ep;
@@ -465,6 +482,7 @@ class Position {
   /* A null move (pass) for null-move pruning in the search. */
   makeNull() {
     const h = this.histPly;
+    if (h + 1 >= this.uMove.length) this.growHistory(h + 2);
     this.uMove[h] = NO_MOVE;
     this.uCastling[h] = this.castling;
     this.uEp[h] = this.ep;
@@ -967,13 +985,16 @@ class TranspositionTable {
   resize(mb) {
     let n = 1024;
     while (n * 2 * 16 <= mb * 1024 * 1024) n *= 2;
+    // allocate first, publish last: a failed allocation must leave the old table intact
+    const keys = new Int32Array(n), moves = new Int32Array(n), scores = new Int16Array(n), evals = new Int16Array(n);
+    const depths = new Uint8Array(n), flags = new Uint8Array(n);
     this.size = n; this.mask = n - 1;
-    this.keys = new Int32Array(n);     // hashHi; hashLo picks the slot
-    this.moves = new Int32Array(n);
-    this.scores = new Int16Array(n);
-    this.evals = new Int16Array(n);
-    this.depths = new Uint8Array(n);
-    this.flags = new Uint8Array(n);    // 0 empty, else TT_* | (age << 2)
+    this.keys = keys;        // hashHi; hashLo picks the slot
+    this.moves = moves;
+    this.scores = scores;
+    this.evals = evals;
+    this.depths = depths;
+    this.flags = flags;      // 0 empty, else TT_* | (age << 2)
     this.age = 0;
     this.used = 0;
   }
@@ -1363,10 +1384,11 @@ class Search {
       soft = Math.min(usable * 0.8, usable / mtg + inc * 0.75);
       hard = Math.min(usable * 0.8, soft * 4);
     }
-    if (limits.timeScale) soft *= limits.timeScale;      // leave room for the extra lines below
+    const fullHard = hard;
+    if (limits.timeScale) { soft *= limits.timeScale; hard *= limits.timeScale; }   // the rest is for the extra lines
     this.hardTime = this.startTime + hard;
     this.nodeLimit = limits.nodes || Infinity;
-    const maxDepth = Math.min(limits.depth || MAX_DEPTH, MAX_DEPTH);
+    const maxDepth = Math.max(1, Math.min(limits.depth || MAX_DEPTH, MAX_DEPTH));
 
     const rootMoves = pos.legalMoves();
     const multiPV = Math.max(1, Math.min(limits.multiPV || 1, rootMoves.length));
@@ -1422,7 +1444,7 @@ class Search {
       await yieldToEventLoop();
       if (this.stopRequested) break;
     }
-    if (limits.extraLines && result.moves.length > 0 && !this.stopRequested) this.searchExtraLines(result, limits.extraLines, soft);
+    if (limits.extraLines && result.moves.length > 0 && !this.stopRequested) this.searchExtraLines(result, limits.extraLines, this.startTime + fullHard);
     // "go infinite" must wait for "stop" even when the search ran out of depth
     while (limits.infinite && !this.stopRequested) await sleepMs(5);
     this.running = false;
@@ -1435,21 +1457,30 @@ class Search {
      them with the best move. This keeps the skill levels' main search as
      deep as full strength, so the top of the ladder is set by the budget
      and not by the cost of a five-line search. */
-  searchExtraLines(result, count, soft) {
+  searchExtraLines(result, count, deadline) {
     const depth = Math.max(1, result.depth - 2);
+    const best = result.scores[0];
     this.excludedRootMoves = [result.moves[0]];
+    this.stopped = false;
     this.allowStop = true;
-    this.hardTime = Math.min(this.hardTime, now() + Math.max(2, soft * 0.6));
-    for (let i = 0; i < count && result.moves.length < this.pos.legalMoves().length; i++) {
-      const score = this.search(depth, -INFINITE, INFINITE, 0, true);
+    this.hardTime = deadline;
+    const legal = this.pos.legalMoves().length;
+    for (let i = 0; i < count && result.moves.length < legal; i++) {
+      // only the range down to "clearly losing" matters, so a narrow window keeps this cheap
+      const alpha = Math.max(-INFINITE + 1, best - 600), beta = Math.min(INFINITE - 1, best + 1);
+      const score = this.search(depth, alpha, beta, 0, true);
       if (this.stopped) break;
       const len = this.pvLength[0];
-      if (len === 0) break;
+      if (len === 0 || score <= alpha) break;              // everything left loses at least 600 cp
       const pv = [];
       for (let k = 0; k < len; k++) pv.push(this.pvTable[k]);
-      result.moves.push(pv[0]); result.scores.push(score); result.pvs.push(pv); result.depths.push(depth);
+      result.moves.push(pv[0]); result.scores.push(Math.min(score, best)); result.pvs.push(pv); result.depths.push(depth);
       this.excludedRootMoves.push(pv[0]);
     }
+    // keep the best move first, the rest sorted by score for well formed MultiPV output
+    const tail = result.moves.slice(1).map((m, k) => ({ m, s: result.scores[k + 1], pv: result.pvs[k + 1], d: result.depths[k + 1] })).sort((x, y) => y.s - x.s);
+    result.moves = [result.moves[0], ...tail.map(t => t.m)]; result.scores = [result.scores[0], ...tail.map(t => t.s)];
+    result.pvs = [result.pvs[0], ...tail.map(t => t.pv)]; result.depths = [result.depths[0], ...tail.map(t => t.d)];
     this.excludedRootMoves = [];
     this.stopped = false;
   }
@@ -1509,7 +1540,7 @@ const MIN_UNSEARCHED_LOSS = 20;   // centipawns; a move outside the searched lin
 
 class SkillState {
   constructor() { this.reset(); }
-  reset() { this.accumulated = -1; this.lastLoss = 0; }   // -1: not yet started
+  reset() { this.accumulated = [-1, -1]; this.lastLoss = 0; }   // per colour; -1: not yet started
 }
 
 function isMateInOne(pos, move) {
@@ -1525,6 +1556,26 @@ function isMateInOne(pos, move) {
   return mate;
 }
 
+/* After our move: did we mate (score for us: MATE), stalemate (0), or can
+   the opponent mate us at once (-MATE)? Captures-only searches miss these. */
+function terminalScore(pos) {
+  const replies = pos.legalMoves();
+  if (replies.length === 0) return pos.inCheck() ? MATE - 1 : 0;
+  for (const r of replies) {
+    if (!pos.make(r)) continue;
+    const check = pos.inCheck();
+    let mated = false;
+    if (check) {
+      const list = new Int32Array(256), n = generateMoves(pos, list, 0, false);
+      mated = true;
+      for (let i = 0; i < n && mated; i++) if (pos.make(list[i])) { pos.unmake(); mated = false; }
+    }
+    pos.unmake();
+    if (mated) return -MATE + 2;
+  }
+  return null;
+}
+
 /* Level 0: a random legal move, or mate in one if available. */
 function randomMove(pos, rng) {
   const moves = pos.legalMoves();
@@ -1538,8 +1589,9 @@ function chooseSkillMove(search, result, level, state, rng) {
   const pos = search.pos;
   const budget = SKILL_BUDGET_PER_40_MOVES[level];
   const perMove = budget / 40;
-  if (state.accumulated < 0) state.accumulated = perMove;
-  else state.accumulated = Math.min(budget, state.accumulated + perMove);
+  const side = pos.side >> 3;        // one accumulator per colour, so one engine can serve two bots
+  const acc = state.accumulated[side] < 0 ? perMove : Math.min(budget, state.accumulated[side] + perMove);
+  state.accumulated[side] = acc;
 
   const best = result.scores[0];
   if (best >= MATE_IN_MAX) return result.moves[0];        // never spoil a forced mate
@@ -1564,7 +1616,7 @@ function chooseSkillMove(search, result, level, state, rng) {
   // one-ply static estimate instead of being left out, so the candidate set
   // never depends on move generation order.
   const searched = new Set(result.moves);
-  const alpha = Math.max(-INFINITE + 1, best - Math.floor(state.accumulated) - 1);
+  const alpha = Math.max(-INFINITE + 1, best - Math.floor(acc) - 1);
   const beta = Math.min(INFINITE - 1, best - worstSearched + 1);
   if (alpha < beta) {
     search.stopped = false;
@@ -1576,7 +1628,9 @@ function chooseSkillMove(search, result, level, state, rng) {
       if (searched.has(m)) continue;
       if (!pos.make(m)) continue;
       let est;
-      if (search.stopped) est = -evaluate(pos);
+      const terminal = terminalScore(pos);              // mate, stalemate or a mate-in-one reply
+      if (terminal !== null) est = terminal;
+      else if (search.stopped) est = -evaluate(pos);
       else {
         est = -search.qsearch(-beta, -alpha, 1);
         if (search.stopped) est = -evaluate(pos);
@@ -1593,9 +1647,9 @@ function chooseSkillMove(search, result, level, state, rng) {
   // for the worst move; they fail to tell the good moves from the bad ones
   // within their tolerance. With an unlimited budget this is the random
   // mover of level 0; with a zero budget it is the best move.
-  const affordable = candidates.filter(c => c.loss <= state.accumulated);
+  const affordable = candidates.filter(c => c.loss <= acc);
   const pick = affordable.length ? affordable[rng.below(affordable.length)] : candidates[0];
-  state.accumulated -= Math.max(0, pick.loss);
+  state.accumulated[side] = acc - Math.max(0, pick.loss);
   state.lastLoss = Math.max(0, pick.loss);
   return pick.move;
 }
@@ -1635,9 +1689,11 @@ class Engine {
   async command(line) {
     const cmd = line.trim().split(/\s+/)[0];
     const immediate = cmd === 'stop' || cmd === 'isready' || cmd === 'quit' || cmd === 'uci' || cmd === '';
+    if (this.quitRequested && cmd !== 'quit') return;                 // nothing runs after quit
     if (this.search.running && !immediate) { this.pending.push(line); return; }
     await this.execute(line);
-    while (!this.search.running && this.pending.length) await this.execute(this.pending.shift());
+    while (!this.search.running && this.pending.length && !this.quitRequested) await this.execute(this.pending.shift());
+    if (this.quitRequested && !this.search.running && this.onQuit) this.onQuit();
   }
 
   async execute(line) {
@@ -1665,7 +1721,7 @@ class Engine {
       case 'position': this.setPosition(tokens); break;
       case 'go': await this.go(tokens); break;
       case 'stop': this.search.stopRequested = true; if (this.search.running) this.search.stopped = true; break;
-      case 'quit': this.search.stopRequested = true; this.quitRequested = true; if (!this.search.running && this.onQuit) this.onQuit(); break;
+      case 'quit': this.search.stopRequested = true; this.quitRequested = true; this.pending.length = 0; break;
       case 'bench': await this.bench(parseInt(tokens[1], 10) || 10); break;
       case 'perft': this.perft(parseInt(tokens[1], 10) || 5); break;
       case 'd': case 'display': this.send(this.pos.toString()); break;
@@ -1702,7 +1758,7 @@ class Engine {
     if (tokens[i] === 'startpos') i++;
     else if (tokens[i] === 'fen') { i++; const parts = []; while (i < tokens.length && tokens[i] !== 'moves') parts.push(tokens[i++]); fen = parts.join(' '); }
     this.positionInvalid = false;
-    this.pos.setFen(fen);
+    try { this.pos.setFen(fen); } catch (e) { this.positionInvalid = true; throw e; }
     this.pos.chess960 = this.options.chess960;
     let count = 0;
     if (tokens[i] === 'moves') {
@@ -1722,7 +1778,7 @@ class Engine {
     for (let i = 1; i < tokens.length; i++) {
       const t = tokens[i], v = parseInt(tokens[i + 1], 10);
       if (t === 'infinite') limits.infinite = true;
-      else if (['depth', 'nodes', 'movetime', 'wtime', 'btime', 'winc', 'binc', 'movestogo'].includes(t) && !isNaN(v)) { limits[t] = v; i++; }
+      else if (['depth', 'nodes', 'movetime', 'wtime', 'btime', 'winc', 'binc', 'movestogo'].includes(t) && !isNaN(v)) { limits[t] = Math.max(t === 'depth' || t === 'nodes' ? 1 : 0, v); i++; }
     }
     return limits;
   }
@@ -1740,6 +1796,11 @@ class Engine {
       bestMove = randomMove(pos, this.rng);
       const mate = isMateInOne(pos, bestMove);
       this.send(`info depth 1 seldepth 1 multipv 1 score ${mate ? 'mate 1' : 'cp 0'} nodes 1 nps 1 time 0 pv ${pos.moveToUci(bestMove)}`);
+      if (limits.infinite) {
+        this.search.running = true; this.search.stopRequested = false;
+        while (!this.search.stopRequested) await sleepMs(5);
+        this.search.running = false;
+      }
     } else if (level < MAX_SKILL) {
       limits.multiPV = 1;
       limits.extraLines = 4;          // the top five moves get searched scores
@@ -1754,15 +1815,17 @@ class Engine {
       bestMove = result.moves[0];
       if (result.pvs[0] && result.pvs[0].length > 1) ponder = result.pvs[0][1];
     }
+    if (!bestMove) bestMove = pos.legalMoves()[0];
     this.send('bestmove ' + pos.moveToUci(bestMove) + (ponder ? ' ponder ' + this.ponderString(bestMove, ponder) : ''));
-    if (this.quitRequested && this.onQuit) this.onQuit();
   }
 
   /* After a skill-limited choice, print one more info line whose PV starts
      with the move we are about to play, with the score of that move. */
   reportChosen(result, move) {
     const idx = result.moves.indexOf(move);
-    const s = idx >= 0 ? result.scores[idx] : (result.scores[0] - (this.skill.lastLoss || 0));
+    const s = idx >= 0 ? result.scores[idx]
+      : result.scores[0] <= -MATE_IN_MAX ? result.scores[0]            // already lost: keep the mate score
+      : result.scores[0] - (this.skill.lastLoss || 0);
     const score = s >= MATE_IN_MAX ? 'mate ' + Math.ceil((MATE - s) / 2) : s <= -MATE_IN_MAX ? 'mate -' + Math.ceil((MATE + s) / 2) : 'cp ' + s;
     const pv = idx >= 0 ? result.pvs[idx].map(m => this.pos.moveToUci(m)).join(' ') : this.pos.moveToUci(move);
     const elapsed = Math.max(1, Math.round(now() - this.search.startTime));
@@ -1793,6 +1856,7 @@ class Engine {
     const t0 = now();
     this.search.silent = true;
     for (const fen of BENCH_POSITIONS) {
+      if (this.quitRequested) break;
       this.pos.chess960 = false;
       this.pos.setFen(fen);
       this.skill.reset();
@@ -1849,7 +1913,8 @@ if (isWorker) {
   self.onmessage = e => engine.command(String(e.data));
 } else if (isCli) {
   const engine = new Engine(s => process.stdout.write(s + '\n'));
-  engine.onQuit = () => { process.stdin.pause(); process.exitCode = 0; };
+  let quitting = false;
+  engine.onQuit = () => { if (quitting) return; quitting = true; process.stdin.pause(); process.stdin.destroy(); process.exitCode = 0; };
   const args = process.argv.slice(2);
   if (args[0] === 'bench') {
     engine.bench(parseInt(args[1], 10) || 10).then(() => process.exit(0));
