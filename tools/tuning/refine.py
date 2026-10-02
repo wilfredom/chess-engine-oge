@@ -2,8 +2,9 @@
 """Adaptive skill ladder refinement.
 Usage: refine.py <out_dir> <rounds> <tc> <concurrency> <seed_results_dir> rung1 rung2 ...
 Rungs: 'random', 'full', or integer budgets (cp per 40 moves), strongest last.
-Inserts the geometric midpoint where an adjacent gap > 200 Elo, drops a rung where
-a gap < 100 Elo, measures missing pairs, until all gaps are within [100, 200]."""
+Inserts the geometric midpoint where an adjacent gap > 220 Elo, drops a rung where
+a gap < 80 Elo (hysteresis against 100-game noise), measures missing pairs, and never
+re-inserts a budget it has dropped, until every gap is within range or cannot be refined."""
 import json, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ladder import run_match
@@ -29,27 +30,30 @@ def gap(a, b):
 def measure(a, b):
     r = run_match(out_dir, str(a), str(b), rounds, tc, conc)
     measured[(str(a), str(b))] = r; save()
+dropped = set()
 def mid(a, b):
     if a == 'random' or b == 'full': return None
     ia, ib = int(a), int(b)
-    m = ia // 2 if ib == 0 else int(round(math.sqrt(ia * ib)))
-    return None if m in (ia, ib) or m < 1 else m
+    for frac in (0.5, 0.33, 0.67, 0.25, 0.75):      # geometric interpolation, skipping dropped budgets
+        m = int(round(ia * (1 - frac))) if ib == 0 else int(round(math.exp(math.log(ia) * (1 - frac) + math.log(ib) * frac)))
+        if m not in (ia, ib) and m >= 1 and m not in dropped: return m
+    return None
 for it in range(80):
     changed = False
     for i in range(len(rungs) - 1):
         a, b = rungs[i], rungs[i + 1]
         g = gap(a, b)
         if g is None: measure(a, b); changed = True; break
-        if g > 200:
+        if g > 220:
             m = mid(a, b)
             if m is None: continue        # cannot be refined by budget alone; reported at the end
             print(f'insert {m} between {a} and {b} (gap {g:.0f})', flush=True)
             rungs.insert(i + 1, m); changed = True; break
-        if g < 100:
+        if g < 80:
             drop = i + 1 if b != 'full' else i
             if rungs[drop] in ('random', 'full'): continue
             print(f'drop {rungs[drop]} (gap {a}->{b} is {g:.0f})', flush=True)
-            del rungs[drop]; changed = True; break
+            dropped.add(rungs[drop]); del rungs[drop]; changed = True; break
     save()
     if not changed: break
 print('LADDER', [str(r) for r in rungs])
