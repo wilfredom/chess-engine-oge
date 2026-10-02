@@ -1529,32 +1529,32 @@ class Search {
 */
 
 const SKILL_BUDGET_PER_40_MOVES = [
-  Infinity,   // level 0: random moves (handled separately)
-  25369,     // level 1
-  22627,     // level 2
-  19027,     // level 3
-  17000,     // level 4
-  15000,     // level 5
-  13455,     // level 6
-  11980,     // level 7
-  10676,     // level 8
-  9514,      // level 9
-  8354,      // level 10
-  6987,      // level 11
-  5844,      // level 12
-  4888,      // level 13
-  3419,      // level 14
-  2650,      // level 15
-  2000,      // level 16
-  1414,      // level 17
-  1000,      // level 18
-  620,       // level 19
-  400,       // level 20
-  250,       // level 21
-  193,       // level 22
-  100,       // level 23
-  60,        // level 24
-  0,          // level 25: full strength
+  Infinity,  // level 0: random moves (handled separately)
+  25369,    // level 1
+  22627,    // level 2
+  19027,    // level 3
+  17000,    // level 4
+  15000,    // level 5
+  13455,    // level 6
+  11980,    // level 7
+  10676,    // level 8
+  9514,     // level 9
+  8354,     // level 10
+  6987,     // level 11
+  5844,     // level 12
+  4888,     // level 13
+  3419,     // level 14
+  2650,     // level 15
+  2000,     // level 16
+  1414,     // level 17
+  1000,     // level 18
+  620,      // level 19
+  450,      // level 20
+  270,      // level 21
+  193,      // level 22
+  100,      // level 23
+  60,       // level 24
+  0,        // level 25: full strength
 ];
 const MAX_SKILL = SKILL_BUDGET_PER_40_MOVES.length - 1;
 const MIN_UNSEARCHED_LOSS = 20;   // centipawns; a move outside the searched lines is never rated closer than this
