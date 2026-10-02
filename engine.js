@@ -1081,6 +1081,7 @@ class Search {
     this.nodes = 0; this.seldepth = 0;
     this.stopped = false; this.stopRequested = false; this.running = false;
     this.hardTime = Infinity; this.nodeLimit = Infinity; this.allowStop = true;
+    this.qsMaxPly = MAX_PLY;        // the skill estimator caps quiescence depth
     this.silent = false;
   }
 
@@ -1102,7 +1103,7 @@ class Search {
     this.checkLimits();
     if (ply > this.seldepth) this.seldepth = ply;
     const pos = this.pos;
-    if (ply >= MAX_PLY - 1) return evaluate(pos);
+    if (ply >= MAX_PLY - 1 || ply >= this.qsMaxPly) return evaluate(pos);
     const inCheck = pos.inCheck();
     let best = -INFINITE;
     if (!inCheck) {
@@ -1556,10 +1557,12 @@ function chooseSkillMove(search, result, level, state, rng) {
   // An unsearched move is at best as good as the worst searched line, and
   // never better than a small fixed loss: a cheap estimate is no proof.
   worstSearched = Math.max(worstSearched, MIN_UNSEARCHED_LOSS);
-  // Estimates for the unsearched moves. Only the range between "as bad as the
-  // worst searched move" and "just unaffordable" matters, so the quiescence
-  // search gets exactly that window, and a node cap keeps this phase from
-  // eating the clock in wild positions.
+  // Estimates for the unsearched moves: a quiescence search a few plies deep
+  // (enough to see a hanging piece) with a window covering only the range
+  // between "as bad as the worst searched move" and "just unaffordable".
+  // A node cap protects the clock in wild positions; moves it cuts off get a
+  // one-ply static estimate instead of being left out, so the candidate set
+  // never depends on move generation order.
   const searched = new Set(result.moves);
   const alpha = Math.max(-INFINITE + 1, best - Math.floor(state.accumulated) - 1);
   const beta = Math.min(INFINITE - 1, best - worstSearched + 1);
@@ -1567,16 +1570,22 @@ function chooseSkillMove(search, result, level, state, rng) {
     search.stopped = false;
     search.allowStop = true;
     search.hardTime = Math.max(search.hardTime, now() + 30);
-    search.nodeLimit = search.nodes + Math.max(2000, Math.min(30000, search.nodes * 0.2));
+    search.nodeLimit = search.nodes + Math.max(4000, Math.min(40000, search.nodes * 0.25));
+    search.qsMaxPly = 1 + 4;
     for (const m of pos.legalMoves()) {
-      if (searched.has(m) || search.stopped) continue;
+      if (searched.has(m)) continue;
       if (!pos.make(m)) continue;
-      const est = -search.qsearch(-beta, -alpha, 1);
+      let est;
+      if (search.stopped) est = -evaluate(pos);
+      else {
+        est = -search.qsearch(-beta, -alpha, 1);
+        if (search.stopped) est = -evaluate(pos);
+      }
       pos.unmake();
-      if (search.stopped) continue;                       // out of time or nodes: leave it out
       if (est <= alpha) continue;                          // costs more than we may spend
       candidates.push({ move: m, loss: Math.max(worstSearched, best - est) });
     }
+    search.qsMaxPly = MAX_PLY;
     search.stopped = false;
   }
 
