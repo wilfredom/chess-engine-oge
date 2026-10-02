@@ -358,6 +358,7 @@
     pos: new O.Position(),       // the live position; never used for viewing history
     scratch: new O.Position(),   // for inspecting past positions
     startFen: O.START_FEN, chess960: false,
+    mode: 'hvb',                 // the mode of THIS game; settings.mode is only what the next game will use
     humanColor: 'white',
     moves: [],                   // { move, uci, san, fen }  (fen = position after the move)
     fens: [O.START_FEN],         // fens[i] = position after i plies
@@ -372,26 +373,33 @@
     pendingSettings: false,
     lastTick: now(),
   };
-  const levelFor = color => (settings.mode === 'hvb' ? settings.botLevel : (color === 'white' ? settings.whiteLevel : settings.blackLevel));
+  // Bot levels stay live (read at the bot's next move); the mode is fixed per game.
+  const levelFor = color => (G.mode === 'hvb' ? settings.botLevel : (color === 'white' ? settings.whiteLevel : settings.blackLevel));
   const isLive = () => G.view === null;
   const sideToMove = () => colorName(G.pos.side);
-  const humanTurn = () => settings.mode === 'hvb' && !G.result && sideToMove() === G.humanColor;
+  const humanTurn = () => G.mode === 'hvb' && !G.result && sideToMove() === G.humanColor;
 
   /* ---------------- Engine client: Web Worker, main-thread fallback ---------------- */
+  // A search never legitimately takes this long (the engine's hard limit is under 10 s), and an
+  // "info string error" during a search not followed by a bestmove within ERROR_GRACE_MS means the search died.
+  const WATCHDOG_MS = 30000, ERROR_GRACE_MS = 2000, MAX_AUTO_RESTARTS = 3;
   const engine = {
     backend: null, ready: false, busy: false, wantMove: false, worker: null, main: null,
     log: [], lastPosition: '', readyTimer: 0,
+    searchId: 0, watchdog: 0, errorTimer: 0, failures: 0, gaveUp: false,
     start() {
       let worker = null;
       try { worker = new Worker('engine.js'); } catch (e) { worker = null; }
       if (!worker) { this.fallback('Worker unavailable'); return; }
       this.worker = worker; this.backend = 'worker';
-      worker.onmessage = e => { if (this.backend === 'worker') this.onLine(String(e.data)); };
+      worker.onmessage = e => { if (this.worker === worker) this.onLine(String(e.data)); };
       worker.onerror = e => {
-        if (!this.ready) this.fallback(e && e.message ? e.message : 'worker error');
-        else setError('Engine error: ' + (e && e.message ? e.message : 'unknown'));
+        if (this.worker !== worker) return;
+        const msg = e && e.message ? e.message : 'worker error';
+        if (!this.ready) this.fallback(msg);
+        else this.restart('Engine error: ' + msg);
       };
-      this.readyTimer = setTimeout(() => { if (!this.ready) this.fallback('worker timed out'); }, 6000);
+      this.readyTimer = setTimeout(() => { if (!this.ready && this.worker === worker) this.fallback('worker timed out'); }, 6000);
       this.send('uci');
     },
     fallback(reason) {
@@ -399,10 +407,41 @@
       clearTimeout(this.readyTimer);
       this.backend = 'main';
       this.fallbackReason = reason;
+      this.startMain();
+    },
+    startMain() {
       // Deliver output asynchronously so a bestmove handler never re-enters the engine from inside its own search.
-      this.main = new O.Engine(line => setTimeout(() => this.onLine(line), 0));
+      const eng = new O.Engine(line => setTimeout(() => { if (this.main === eng) this.onLine(line); }, 0));
+      this.main = eng;
       this.send('uci');
     },
+    go(cmd) {
+      this.send(cmd);
+      this.busy = true;
+      const id = ++this.searchId;
+      clearTimeout(this.watchdog); clearTimeout(this.errorTimer);
+      this.watchdog = setTimeout(() => { if (this.busy && this.searchId === id) this.restart('Engine stopped responding'); }, WATCHDOG_MS);
+    },
+    searchEnded() {
+      clearTimeout(this.watchdog); clearTimeout(this.errorTimer);
+      this.busy = false; this.failures = 0;
+    },
+    // The search will never answer (exception inside the engine, dead worker): throw this engine away,
+    // start a fresh one and let the bot try again once it is ready. After a few failures in a row, wait
+    // for the user (New game, Undo, Resume) instead of looping.
+    restart(reason) {
+      clearTimeout(this.watchdog); clearTimeout(this.errorTimer); clearTimeout(this.readyTimer);
+      this.failures++;
+      this.gaveUp = this.failures >= MAX_AUTO_RESTARTS;
+      G.thinking = null; G.info = null;
+      this.busy = false; this.wantMove = false; this.ready = false;
+      if (this.worker) { try { this.worker.terminate(); } catch (e) { /* ignore */ } this.worker = null; }
+      if (this.main) { const old = this.main; this.main = null; old.command('quit').catch(() => {}); }
+      setError(`${reason}; the engine was restarted.` + (this.gaveUp ? ' Press New game or Undo to continue.' : ''));
+      if (this.backend === 'worker') this.start(); else this.startMain();
+      render();
+    },
+    resetFailures() { this.failures = 0; this.gaveUp = false; },
     send(line) {
       this.log.push('> ' + line); if (this.log.length > 400) this.log.splice(0, 100);
       if (line.startsWith('position ')) this.lastPosition = line;
@@ -419,6 +458,13 @@
         this.send('ucinewgame');
         this.send('setoption name UCI_Chess960 value ' + G.chess960);
         render(); maybeBotMove();
+      } else if (line.startsWith('info string error')) {
+        // engine.js reports an exception in a command this way; if it was the search, no bestmove follows.
+        if (this.busy) {
+          const id = this.searchId;
+          clearTimeout(this.errorTimer);
+          this.errorTimer = setTimeout(() => { if (this.busy && this.searchId === id) this.restart('Engine ' + line.slice(12)); }, ERROR_GRACE_MS);
+        }
       } else if (line.startsWith('info ')) {
         if (!G.thinking) return;
         const d = /\bdepth (\d+)/.exec(line), s = /\bscore (cp|mate) (-?\d+)/.exec(line), mp = /\bmultipv (\d+)/.exec(line);
@@ -434,7 +480,7 @@
 
   function onBestmove(uci) {
     const t = G.thinking;
-    G.thinking = null; engine.busy = false;
+    G.thinking = null; engine.searchEnded();
     if (!t) {                     // a search we cancelled: discard, then see if a bot should move now
       if (engine.wantMove) { engine.wantMove = false; maybeBotMove(); }
       render();
@@ -460,17 +506,16 @@
   }
 
   function maybeBotMove() {
-    if (!engine.ready || G.result) return;
+    if (!engine.ready || engine.gaveUp || G.result) return;
     const side = sideToMove();
-    const botTurn = settings.mode === 'bvb' ? G.running : side !== G.humanColor;
+    const botTurn = G.mode === 'bvb' ? G.running : side !== G.humanColor;
     if (!botTurn || G.thinking) return;
     if (engine.busy) { engine.wantMove = true; return; }
     const level = levelFor(side);
     engine.send('setoption name UCI_Chess960 value ' + G.chess960);
     engine.send('setoption name Skill_Level value ' + level);
     engine.send(positionCommand());
-    engine.send(`go wtime ${G.virtual.white} btime ${G.virtual.black} winc ${INCREMENT} binc ${INCREMENT}`);
-    engine.busy = true;
+    engine.go(`go wtime ${G.virtual.white} btime ${G.virtual.black} winc ${INCREMENT} binc ${INCREMENT}`);
     G.thinking = { color: side, level, startedAt: now() };
     G.info = null;
     render();
@@ -546,19 +591,27 @@
     }
     return c;
   }
-  function capturedPieces(fen) {
-    G.scratch.setFen(G.startFen);
-    const start = materialCounts(G.scratch.board);
-    G.scratch.setFen(fen);
-    const cur = materialCounts(G.scratch.board);
+  // Pieces each side has captured in the first `plies` moves, taken from the move history so that promotions
+  // are right (a promoted pawn is not a captured pawn; a captured promoted queen is a captured queen).
+  // The material balance comes from the board at that point.
+  function capturedPieces(plies) {
+    const pos = G.scratch;
+    pos.setFen(G.startFen); pos.chess960 = G.chess960;
+    const taken = { white: [0, 0, 0, 0, 0, 0, 0], black: [0, 0, 0, 0, 0, 0, 0] };   // taken.white[t] = black pieces of type t
+    for (const m of G.moves.slice(0, plies)) {
+      const flag = O.moveFlag(m.move);
+      if (flag !== O.FLAG_CASTLE) {                    // a Chess960 king may "land" on its own rook
+        const victim = flag === O.FLAG_EP ? O.PAWN : O.typeOf(pos.board[O.moveTo(m.move)]);
+        if (victim) taken[colorName(pos.side)][victim]++;
+      }
+      if (pos.histPly > 1900) pos.setFen(pos.fen());  // same bound on the undo stack as the live position
+      pos.make(m.move);
+    }
     const out = { white: [], black: [], balance: 0 };    // out.white = pieces White has captured (black pieces)
     for (const color of ['white', 'black']) {
-      const victim = other(color);
-      for (const t of [O.PAWN, O.KNIGHT, O.BISHOP, O.ROOK, O.QUEEN]) {
-        const n = start[victim][t] - cur[victim][t];
-        if (n > 0) out[color].push({ type: t, count: n });
-      }
+      for (const t of [O.PAWN, O.KNIGHT, O.BISHOP, O.ROOK, O.QUEEN]) if (taken[color][t]) out[color].push({ type: t, count: taken[color][t] });
     }
+    const cur = materialCounts(pos.board);
     for (const t of [O.PAWN, O.KNIGHT, O.BISHOP, O.ROOK, O.QUEEN]) out.balance += VALUE[t] * (cur.white[t] - cur.black[t]);
     return out;
   }
@@ -585,6 +638,7 @@
 
   /* ---------------- Game actions ---------------- */
   function applyMove(move) {
+    tick();                       // credit the time up to now to the side that is moving
     const pos = G.pos;
     const san = sanOf(pos, move);
     const uci = pos.moveToUci(move);
@@ -606,20 +660,22 @@
   function rebuildPosition() {
     const pos = G.pos;
     pos.setFen(G.startFen); pos.chess960 = G.chess960;
-    G.fens = [G.startFen];
+    G.fens = [pos.fen()];         // same castling notation (Shredder letters in Chess960) as the FENs after each move
     for (const m of G.moves) { pos.make(m.move); pos.gamePly++; G.fens.push(m.fen); }
     G.result = null; G.view = null;
   }
 
   function newGame() {
     cancelThinking(); hidePromotion();
+    engine.resetFailures();
+    G.mode = settings.mode;
     G.chess960 = settings.variant === 'chess960';
     G.startFen = G.chess960 ? chess960Fen(settings.startNumber) : O.START_FEN;
     G.pos.setFen(G.startFen); G.pos.chess960 = G.chess960;
-    G.moves = []; G.fens = [G.startFen]; G.result = null; G.view = null;
+    G.moves = []; G.fens = [G.pos.fen()]; G.result = null; G.view = null;
     G.humanColor = settings.humanColor === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : settings.humanColor;
-    G.orientation = settings.mode === 'hvb' ? G.humanColor : 'white';
-    G.running = settings.mode === 'hvb';
+    G.orientation = G.mode === 'hvb' ? G.humanColor : 'white';
+    G.running = G.mode === 'hvb';
     G.elapsed = { white: 0, black: 0 };
     G.virtual = { white: START_CLOCK, black: START_CLOCK };
     G.info = null; G.pendingSettings = false; G.lastTick = now();
@@ -631,8 +687,10 @@
 
   function undo() {
     if (!G.moves.length) return;
+    tick();
     cancelThinking(); hidePromotion();
-    if (settings.mode === 'bvb') {
+    engine.resetFailures();
+    if (G.mode === 'bvb') {
       G.running = false;
       G.moves.pop(); rebuildPosition();
     } else {
@@ -643,8 +701,10 @@
   }
 
   function toggleRunning() {
-    if (settings.mode !== 'bvb' || G.result) return;
+    if (G.mode !== 'bvb' || G.result) return;
+    tick();
     G.running = !G.running;
+    if (G.running) engine.resetFailures();
     if (!G.running) cancelThinking();
     G.lastTick = now();
     render();
@@ -659,7 +719,7 @@
 
   function playUci(uci) {
     if (!isLive() || G.result) return false;
-    if (settings.mode === 'hvb' ? !humanTurn() : (G.running || G.thinking)) return false;
+    if (G.mode === 'hvb' ? !humanTurn() : (G.running || G.thinking)) return false;
     const move = G.pos.parseMove(uci);
     if (move === O.NO_MOVE) return false;
     applyMove(move);
@@ -750,26 +810,24 @@
 
   function clockSide() {
     if (G.result || !engine.ready) return null;
-    if (settings.mode === 'bvb' && !G.running) return null;
+    if (G.mode === 'bvb' && !G.running) return null;
     return sideToMove();
   }
 
   function playerName(color) {
-    if (settings.mode === 'hvb' && color === G.humanColor) return 'You';
+    if (G.mode === 'hvb' && color === G.humanColor) return 'You';
     return `Bot · Level ${levelFor(color)}`;
   }
 
-  function renderBar(where, color) {
+  function renderBar(where, color, cap) {
     const bar = $('bar-' + where);
     $('name-' + where).textContent = playerName(color);
     const sub = [color === 'white' ? 'White' : 'Black'];
     const lvl = levelFor(color);
-    if (!(settings.mode === 'hvb' && color === G.humanColor)) { if (lvl === 0) sub.push('random'); else if (lvl === O.MAX_SKILL) sub.push('full strength'); }
-    if (!G.result && sideToMove() === color) sub.push(G.thinking && G.thinking.color === color ? 'thinking…' : (clockSide() ? 'to move' : (settings.mode === 'bvb' ? 'paused' : 'to move')));
+    if (!(G.mode === 'hvb' && color === G.humanColor)) { if (lvl === 0) sub.push('random'); else if (lvl === O.MAX_SKILL) sub.push('full strength'); }
+    if (!G.result && sideToMove() === color) sub.push(G.thinking && G.thinking.color === color ? 'thinking…' : (clockSide() ? 'to move' : (G.mode === 'bvb' ? 'paused' : 'to move')));
     $('sub-' + where).textContent = sub.join(' · ');
     bar.classList.toggle('to-move', !G.result && sideToMove() === color);
-    const fen = isLive() ? G.pos.fen() : G.fens[G.view];
-    const cap = capturedPieces(fen);
     const box = $('cap-' + where);
     let html = '';
     for (const c of cap[color]) html += `<span class="cap"><piece class="${other(color)} ${ROLE[c.type]}"></piece>${c.count > 1 ? `<span class="n">×${c.count}</span>` : ''}</span>`;
@@ -855,7 +913,7 @@
   const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   function renderActions() {
-    const bvb = settings.mode === 'bvb';
+    const bvb = G.mode === 'bvb';
     const start = $('btn-start');
     start.hidden = !bvb;
     start.textContent = G.running ? 'Pause' : (G.moves.length ? 'Resume' : 'Start');
@@ -875,9 +933,11 @@
     $('level-white').value = String(settings.whiteLevel);
     $('level-black').value = String(settings.blackLevel);
     $('variant').value = settings.variant;
-    const inp = $('pos960'), typed = Math.floor(Number(inp.value));
-    const editing = document.activeElement === inp && (inp.value === '' || isNaN(typed) || typed < 0 || typed > 959);
-    if (!editing && inp.value !== String(settings.startNumber)) inp.value = String(settings.startNumber);
+    const inp = $('pos960');
+    if (document.activeElement !== inp) {      // never overwrite what the user is typing
+      if (inp.value !== String(settings.startNumber)) inp.value = String(settings.startNumber);
+      inp.removeAttribute('aria-invalid');
+    }
     $('fen960').textContent = chess960Fen(settings.startNumber);
     const hvb = settings.mode === 'hvb', c960 = settings.variant === 'chess960';
     document.querySelectorAll('.hvb-only').forEach(el => { el.hidden = !hvb; });
@@ -889,8 +949,9 @@
   function render() {
     renderSettings();
     renderBoard();
-    renderBar('top', other(G.orientation));
-    renderBar('bottom', G.orientation);
+    const cap = capturedPieces(G.view === null ? G.moves.length : G.view);
+    renderBar('top', other(G.orientation), cap);
+    renderBar('bottom', G.orientation, cap);
     renderClocks();
     renderMoves();
     renderActions();
@@ -924,12 +985,32 @@
   $('mode').addEventListener('change', e => { settings.mode = e.target.value; gameSettingsChanged(); });
   $('human-color').addEventListener('change', e => { settings.humanColor = e.target.value; gameSettingsChanged(); });
   $('variant').addEventListener('change', e => { settings.variant = e.target.value; gameSettingsChanged(); });
+  // The start position is applied when the number is committed (Enter / Done / leaving the field), not on every
+  // keystroke: typing "960" must not start games at 9 and 96 on the way. Out-of-range input is flagged while typing
+  // and snaps back to the position in use when committed.
+  const pos960Valid = inp => inp.value.trim() !== '' && !inp.validity.badInput && Number.isInteger(Number(inp.value)) &&
+    Number(inp.value) >= 0 && Number(inp.value) <= 959;
+  function commitPos960() {
+    const inp = $('pos960');
+    inp.removeAttribute('aria-invalid');
+    if (!pos960Valid(inp)) { inp.value = String(settings.startNumber); return; }
+    const v = Number(inp.value);
+    inp.value = String(v);
+    if (v !== settings.startNumber) { settings.startNumber = v; gameSettingsChanged(); }
+  }
   $('pos960').addEventListener('input', e => {
-    const v = Math.floor(Number(e.target.value));
-    if (isNaN(v) || v < 0 || v > 959) return;
-    settings.startNumber = v; gameSettingsChanged();
+    const inp = e.target, bad = inp.validity.badInput || (inp.value.trim() !== '' && !pos960Valid(inp));
+    if (bad) inp.setAttribute('aria-invalid', 'true'); else inp.removeAttribute('aria-invalid');
   });
+  $('pos960').addEventListener('change', commitPos960);
+  $('pos960').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); commitPos960(); e.target.blur(); } });
   $('pos960').addEventListener('blur', () => render());
+  // The settings live in a <form> (mobile keyboards get a Go/Done key); an implicit submit must never reload the page.
+  $('settings').addEventListener('submit', e => {
+    e.preventDefault();
+    commitPos960();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  });
   $('btn-random960').addEventListener('click', () => { settings.startNumber = Math.floor(Math.random() * 960); gameSettingsChanged(); });
   // Strength applies at the bot's next move.
   $('level-bot').addEventListener('change', e => { settings.botLevel = clampLevel(e.target.value); saveSettings(); render(); });
@@ -976,8 +1057,8 @@
       }
       newGame();
     },
-    start() { if (settings.mode === 'bvb' && !G.running) toggleRunning(); },
-    pause() { if (settings.mode === 'bvb' && G.running) toggleRunning(); },
+    start() { if (G.mode === 'bvb' && !G.running) toggleRunning(); },
+    pause() { if (G.mode === 'bvb' && G.running) toggleRunning(); },
     undo, flip() { G.orientation = other(G.orientation); render(); }, view: setView,
     legalUcis() { return G.pos.legalMoves().map(m => G.pos.moveToUci(m)); },
     legalMoves() {
@@ -993,13 +1074,13 @@
     lichessUrl: () => lichessUrl(G.view === null ? G.moves.length : G.view),
     state() {
       return {
-        mode: settings.mode, variant: settings.variant, startNumber: settings.startNumber, startFen: G.startFen,
+        mode: G.mode, settingsMode: settings.mode, variant: settings.variant, startNumber: settings.startNumber, startFen: G.startFen,
         chess960: G.chess960, humanColor: G.humanColor, levels: { white: levelFor('white'), black: levelFor('black') },
         fen: G.pos.fen(), sideToMove: sideToMove(), moves: G.moves.map(m => m.san), ucis: G.moves.map(m => m.uci),
         result: G.result, view: G.view, running: G.running, thinking: !!G.thinking, engineBusy: engine.busy,
         engineReady: engine.ready, engineBackend: engine.backend, fallbackReason: engine.fallbackReason || null,
         elapsed: { ...G.elapsed }, virtual: { ...G.virtual }, orientation: G.orientation,
-        lichessUrl: lichessUrl(G.view === null ? G.moves.length : G.view), captured: capturedPieces(G.pos.fen()),
+        lichessUrl: lichessUrl(G.view === null ? G.moves.length : G.view), captured: capturedPieces(G.moves.length),
         lastPositionCmd: engine.lastPosition, info: G.info, error: errorText, boardFen: cg.getFen(),
         promotionPending: !!promoChoices,
       };
