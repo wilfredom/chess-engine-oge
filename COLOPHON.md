@@ -103,6 +103,10 @@ the ladder; the chain sum is given only as an indication of the range covered.
 
 Chain sum level 1 -> 24: 3183 Elo (indicative only, see above). Levels 1 to 24 were tested pairwise; the pairs 0→1 and 24→25 were excluded on the author's instruction, so level 1 is simply the largest budget that still differs from the random mover (an unlimited budget measured −5 ± 40 Elo against it) and level 24 is the smallest budget whose step from level 23 is still in band.
 
+![Rating vs Skill_Level](tools/tuning/skill_curve.png)
+
+The curve is close to a straight line: R² = 0.999, 141 Elo per level, largest deviation 63 Elo (inside the noise). Data: `tools/tuning/skill_curve.csv`.
+
 ### Patricia
 
 - Requirement: Patricia Skill_Level 1 at least 100 Elo stronger than engine level 1. SPRT at
