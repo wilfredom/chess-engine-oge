@@ -8,7 +8,7 @@ out_dir, rounds, conc, ladder = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]),
 budgets = [int(r) for r in ladder if r not in ('random', 'full')]
 near = min(budgets, key=lambda b: abs(b - 700))          # Patricia level 1 measured between budgets 1000 and 500
 i = ladder.index(str(near))
-pairs = [(ladder[0], ladder[1]), (ladder[i], ladder[i + 1]), (ladder[-2], ladder[-1]), ('pat1', ladder[1]), ('pat1', ladder[i])]
+pairs = [(ladder[0], ladder[1]), (ladder[i], ladder[i + 1]), (ladder[-2], ladder[-1]), ('pat1', ladder[1])]
 os.makedirs(out_dir, exist_ok=True)
 results = []
 for a, b in pairs:
