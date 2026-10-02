@@ -55,7 +55,9 @@ def main():
     ch = list(csv.DictReader(open(f'{HERE}/skill_curve.csv')))
     chain = np.array([float(x['rating_elo']) for x in ch]); chain_se = np.array([float(x['rating_se']) for x in ch])
     se_t = (hi - lo) / (2 * 1.96)
-    z = (r - chain) / np.sqrt(se_t ** 2 + chain_se ** 2)
+    den = np.sqrt(se_t ** 2 + chain_se ** 2); z = np.divide(r - chain, den, out=np.zeros(N), where=den > 0)   # level 1 is the anchor
+    cg = np.array([float(x['gap_to_previous_elo']) for x in ch])[1:]; cg_se = np.array([float(x['gap_se']) for x in ch])[1:]
+    g_se = (ghi - glo) / (2 * 1.96); zg = (gap - cg) / np.sqrt(g_se ** 2 + cg_se ** 2)
 
     slope, icpt = np.polyfit(lv, r, 1); fitl = slope * lv + icpt
     r2 = 1 - np.sum((r - fitl) ** 2) / np.sum((r - r.mean()) ** 2)
@@ -73,6 +75,9 @@ def main():
       'gap_median_ci_halfwidth': round(float(np.median((ghi - glo) / 2)), 1),
       'tournament_vs_chain_slope': round(float(cs), 3),
       'levels_tournament_outside_chain_interval(|z|>1.96)': [int(l) for l, zz in zip(lv, z) if abs(zz) > 1.96],
+      'gap_levels_disagreeing_with_chain(|z|>1.96)': [int(l) for l, zz in zip(lv[1:], zg) if abs(zz) > 1.96],
+      'gap_tournament_minus_chain': [round(float(x), 1) for x in (gap - cg)], 'gap_z': [round(float(x), 2) for x in zg],
+      'gap_tournament': [round(float(x), 1) for x in gap], 'gap_ci': [[round(float(a), 1), round(float(b), 1)] for a, b in zip(glo, ghi)],
       'z_vs_chain': [round(float(x), 2) for x in z],
       'diff_vs_chain': [round(float(x), 1) for x in (r - chain)],
     }
@@ -95,11 +100,11 @@ def plot(lv, r, lo, hi, chain, fitl, gap, glo, ghi, slope, r2):
     a1.plot(lv, chain, color=GREY, lw=1, ls=(0, (4, 3)))
     a1.plot(lv, fitl, color=INK, lw=0.8, alpha=0.55)
     a1.plot(lv, r, color=BLUE, lw=1.8, marker='o', ms=4, mfc=BG, mew=1.4)
-    a1.set_xlim(0.4, 28.2); a1.set_ylabel('Elo (level 1 = 0)')
+    a1.set_xlim(0.4, 28.2); a1.set_ylim(-300, 3500); a1.set_ylabel('Elo (level 1 = 0)')
     ytxt = lambda y: y
-    a1.text(24.4, r[-1], 'tournament fit\n(95% interval shaded)', color=BLUE, va='center', fontsize=9)
-    a1.text(24.4, chain[-1] - 150, 'chain sum of\nneighbour gaps', color=GREY, va='center', fontsize=9)
-    a1.text(24.4, fitl[-1] - 420, f'straight line\n{slope:.0f} Elo/level\nR² = {r2:.4f}', color=INK, va='center', fontsize=9, alpha=0.8)
+    a1.text(24.4, 2800, 'tournament fit\n(95% interval shaded)', color=BLUE, va='center', fontsize=9)
+    a1.text(24.4, 3330, 'chain sum of\nneighbour gaps', color=GREY, va='center', fontsize=9)
+    a1.text(24.4, 2250, f'straight line\n{slope:.0f} Elo/level\nR² = {r2:.4f}', color=INK, va='center', fontsize=9, alpha=0.8)
     a1.set_title('OGE rating per Skill_Level, from a tournament of levels 1-24', loc='left', fontsize=12, color=INK)
     x = lv[1:]
     a2.axhspan(100, 200, color=GREY, alpha=0.14, lw=0)

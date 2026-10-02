@@ -130,6 +130,20 @@ The curve is close to a straight line: R² = 0.999, 141 Elo per level, largest d
 
 No time forfeits occurred in any match of the whole calibration.
 
+## All-levels tournament (levels 1-24)
+
+The neighbour-only calibration above gives a chain-sum curve that had never been checked against games between non-adjacent levels. This run checks it: one tournament over levels 1 to 24 (0 and 25 excluded), every pair with |i-j| <= 6 (123 pairings, 60 games each = 7,380 games, 30 openings from `book.epd` with both colours), fastchess 60d7a7a, 2+0.02, Hash 16, single-threaded `bun engine.js`, 4 concurrent games, 111 minutes, no time losses. One Bradley-Terry maximum-likelihood fit (draw = half a win, level 1 = 0 Elo); 95% intervals from a 2,000-sample bootstrap over openings. A prior of 0.1 point per pairing side keeps 60-0 pairings finite. Engine unchanged. Scripts: `tools/tuning/tournament.py` (runs, resumable), `tools/tuning/tournament_fit.py` (fit and chart); data: `tools/tuning/tournament/pairings/*.json`, `tools/tuning/tournament_ratings.csv`, `tools/tuning/tournament_stats.json`.
+
+![Tournament rating vs Skill_Level](tools/tuning/tournament_curve.png)
+
+**Straight-line fit (tournament ratings):** slope 138.1 Elo per level, R² = 0.9968; largest deviation 126 Elo below the line at level 12 (the 95% interval at level 12 is about 190 Elo wide, so this is roughly within noise).
+
+**Per-level gaps:** mean 132 Elo, standard deviation 43 (each gap carries a 95% half-width of about 57 Elo, so most of that spread is sampling noise). 8 of 23 gaps fall outside 100-200 by point estimate: 7 below (levels 2: 55, 4: 93, 10: 85, 12: 91, 18: 75, 20: 83, 22: 90) and 1 above (level 13: 215). Every one of those intervals still overlaps the band. Smallest gap: level 2 (55); largest: level 13 (215). The gaps alternate high and low from level 16 up (18: 75, 19: 193, 20: 83, 21: 165, 22: 90); the intervals are wide enough that this is not established.
+
+**Tournament vs chain sum:** they do not agree everywhere. The chain sum puts level 24 at 3183 Elo and the tournament at 3036 [2925, 3190], 146 Elo lower (z = -1.05; inside the combined interval). The slope of tournament on chain rating is 0.977, so Elo compresses slightly across non-adjacent levels, by about 2% overall (4.6% in the span). The tournament rating is below the chain sum at every level from 2 to 24, with the largest gap in the middle: -273 Elo at level 12 (z = -2.82), and levels 10, 11, 12 and 13 lie outside the combined 95% interval (differences -200, -187, -274, -202). The chain sum overstates levels 8 to 15 by roughly 140-270 Elo; the difference shrinks to -57 at level 17 and is -100 to -146 from level 18 up. These differences accumulate along the chain, so the per-level z-scores are strongly correlated and do not count as independent disagreements.
+
+**Level 19:** agrees. Tournament rating 2445 [2342, 2585] against 2526 chain sum (-81, z = -0.65); its gap to level 18 is +193 [137, 254] against +171 in the neighbour match. Per-gap comparisons that disagree beyond the intervals: level 12 (tournament +91 vs +177 in the neighbour match, z = -2.14) and level 16 (+182 vs +106, z = +2.0). With 23 comparisons about one such result is expected by chance, so these two are not strong evidence of a problem, but the level 12 shortfall is the one behind the mid-curve deviation above. Nothing was tuned or changed in response.
+
 ## The prompt
 
 ```text
