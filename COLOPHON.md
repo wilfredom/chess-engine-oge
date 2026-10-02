@@ -7,10 +7,11 @@
   session hit its usage limit; after that, four review finders ran on Claude Sonnet and the
   web-app fix round on Claude Opus, per the author's request to use cheaper models where they
   suffice. Everything the subagents found was verified and applied by the main session.
-- **Tokens:** roughly 2.6 million tokens of model output (2.3 million by subagents, roughly 0.3 million by the main session), on top of a conversation context of about 350 thousand tokens that every turn re-read. The main session's own usage is not exposed to the model, so this
-  is an estimate: the subagent runs reported about 2.3 million output tokens in total, and the
-  main conversation ran to roughly 300 thousand tokens of context across several hundred turns
-  (most of them short status turns while matches were running).
+- **Tokens:** roughly 2.6 million tokens of model output: about 2.3 million by the subagents
+  (their runs reported 474k + 673k + 917k + 230k) and an estimated 0.3 million by the main
+  session, whose own usage is not exposed to the model. The main conversation reached about
+  350 thousand tokens of context, re-read on each of several hundred turns (most of them short
+  status turns while matches were running).
 - **Wall-clock time:** 2026-10-01 21:46 to 2026-10-02 09:30 UTC, about 11 hours 45 minutes in total. About 3 hours 20 minutes of that was
   a forced pause when the account's usage limit was reached, and roughly 9 hours was fastchess
   matches running unattended on a 4-core cloud box (about 24,000 games in all).
