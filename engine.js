@@ -1444,7 +1444,9 @@ class Search {
       await yieldToEventLoop();
       if (this.stopRequested) break;
     }
-    if (limits.extraLines && result.moves.length > 0 && !this.stopRequested) this.searchExtraLines(result, limits.extraLines, this.startTime + fullHard);
+    // the extra lines get a bounded slice: the time the main search gave up, at most
+    if (limits.extraLines && result.moves.length > 0 && !this.stopRequested)
+      this.searchExtraLines(result, limits.extraLines, Math.min(this.startTime + fullHard, now() + Math.max(2, soft * 0.6)));
     // "go infinite" must wait for "stop" even when the search ran out of depth
     while (limits.infinite && !this.stopRequested) await sleepMs(5);
     this.running = false;
