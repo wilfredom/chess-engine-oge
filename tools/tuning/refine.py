@@ -31,9 +31,11 @@ def measure(a, b):
     r = run_match(out_dir, str(a), str(b), rounds, tc, conc)
     measured[(str(a), str(b))] = r; save()
 dropped = set()
+RANDOM_EQUIVALENT_BUDGET = 32000      # an unlimited budget plays like the random mover (measured)
 def mid(a, b):
-    if a == 'random' or b == 'full': return None
-    ia, ib = int(a), int(b)
+    if b == 'full': return None
+    ia, ib = (RANDOM_EQUIVALENT_BUDGET if a == 'random' else int(a)), int(b)
+    if a == 'random' and ib >= ia: return None
     for frac in (0.5, 0.33, 0.67, 0.25, 0.75):      # geometric interpolation, skipping dropped budgets
         m = int(round(ia * (1 - frac))) if ib == 0 else int(round(math.exp(math.log(ia) * (1 - frac) + math.log(ib) * frac)))
         if m not in (ia, ib) and m >= 1 and m not in dropped: return m
