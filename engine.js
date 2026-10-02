@@ -1486,15 +1486,16 @@ class Search {
         inside it.
      2. The "loss" of a move is best score minus that move's score.
      3. Each move the allowance BUDGET/40 is added to an accumulator
-        (capped at the whole 40-move budget). We play the move with
-        the largest loss that still fits in the accumulator, then pay
-        that loss from it. Ties are broken at random.
+        (capped at the whole 40-move budget). We pick, uniformly at
+        random, one of the moves whose loss fits in the accumulator and
+        pay its loss from it. So a weak level sprays inaccuracies and
+        the odd big blunder, then plays carefully while it recovers.
      4. When the best move wins by force (a mate score) we just play it.
 
-   Spending the budget as fast as it comes in makes the error rate per
-   move steady, which is what makes Elo a smooth function of BUDGET.
-   The table below is the only strength knob and was tuned with
-   fastchess matches (see the COLOPHON).
+   With an unlimited budget this is exactly the random mover of level 0,
+   with a zero budget it is the best move, and in between strength grows
+   smoothly as the budget shrinks. The table below is the only strength
+   knob and was tuned with fastchess matches (see the COLOPHON).
 */
 
 const SKILL_BUDGET_PER_40_MOVES = [
@@ -1503,6 +1504,7 @@ const SKILL_BUDGET_PER_40_MOVES = [
   0,         // top level: full strength
 ];
 const MAX_SKILL = SKILL_BUDGET_PER_40_MOVES.length - 1;
+const MIN_UNSEARCHED_LOSS = 20;   // centipawns; a move outside the searched lines is never rated closer than this
 
 class SkillState {
   constructor() { this.reset(); }
@@ -1541,14 +1543,19 @@ function chooseSkillMove(search, result, level, state, rng) {
   const best = result.scores[0];
   if (best >= MATE_IN_MAX) return result.moves[0];        // never spoil a forced mate
 
-  // candidate list: exact scores for the searched lines, estimates for the rest
+  // Candidate list: searched lines first. The extra lines were searched a
+  // little shallower than the best move, so a line is never rated better
+  // than the best move (its loss is at least 1).
   const candidates = [];
   let worstSearched = 0;
   for (let i = 0; i < result.moves.length; i++) {
-    const loss = best - result.scores[i];
+    const loss = i === 0 ? 0 : Math.max(1, best - result.scores[i]);
     candidates.push({ move: result.moves[i], loss });
     if (loss > worstSearched) worstSearched = loss;
   }
+  // An unsearched move is at best as good as the worst searched line, and
+  // never better than a small fixed loss: a cheap estimate is no proof.
+  worstSearched = Math.max(worstSearched, MIN_UNSEARCHED_LOSS);
   // Estimates for the unsearched moves. Only the range between "as bad as the
   // worst searched move" and "just unaffordable" matters, so the quiescence
   // search gets exactly that window, and a node cap keeps this phase from
@@ -1573,14 +1580,12 @@ function chooseSkillMove(search, result, level, state, rng) {
     search.stopped = false;
   }
 
-  // the most expensive move we can still afford
-  let chosen = [candidates[0]];
-  for (const c of candidates) {
-    if (c.loss > state.accumulated || c.loss < 0) continue;
-    if (c.loss > chosen[0].loss) chosen = [c];
-    else if (c.loss === chosen[0].loss && c !== chosen[0]) chosen.push(c);
-  }
-  const pick = chosen[rng.below(chosen.length)];
+  // Every affordable move is equally likely. A weak player does not hunt
+  // for the worst move; they fail to tell the good moves from the bad ones
+  // within their tolerance. With an unlimited budget this is the random
+  // mover of level 0; with a zero budget it is the best move.
+  const affordable = candidates.filter(c => c.loss <= state.accumulated);
+  const pick = affordable.length ? affordable[rng.below(affordable.length)] : candidates[0];
   state.accumulated -= Math.max(0, pick.loss);
   state.lastLoss = Math.max(0, pick.loss);
   return pick.move;
