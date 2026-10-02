@@ -758,7 +758,8 @@
     fen: G.startFen,
     orientation: 'white',
     coordinates: true,
-    blockTouchScroll: true,
+    // blockTouchScroll stays false (default): a swipe that starts on empty squares scrolls the page,
+    // touches on pieces (or with a piece selected) still drag/select.
     animation: { enabled: true, duration: 150 },
     highlight: { lastMove: true, check: true },
     movable: { free: false, color: 'white', showDests: true, events: { after: onUserMove } },
