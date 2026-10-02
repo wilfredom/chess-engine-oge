@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>OGE Chess</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232d6a4f'/%3E%3Cpath d='M0 0h8v8H0zM8 8h8v8H8z' fill='%23fff' fill-opacity='.85'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="vendor/chessground.base.css">
 <link rel="stylesheet" href="vendor/chessground.brown.css">
 <link rel="stylesheet" href="vendor/chessground.cburnett.css">
@@ -49,7 +50,7 @@
   button, select, input { font: inherit; color: inherit; }
   header {
     display: flex; align-items: baseline; gap: 12px;
-    padding: 10px 16px 0;
+    padding: 10px max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
     max-width: 1200px; margin: 0 auto;
   }
   header h1 { font-size: 20px; margin: 0; letter-spacing: 0.2px; }
@@ -58,17 +59,23 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
-    padding: 10px 12px 24px;
+    padding: 10px max(12px, env(safe-area-inset-right)) 24px max(12px, env(safe-area-inset-left));
     max-width: 1200px; margin: 0 auto;
   }
-  .board-col { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
+  /* --bs is the board size; the bars, the action row and the status line below share it, so it lives on their parent */
+  .board-col { --bs: min(100vw - 24px, 70vh); display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
   .side-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-  .board-area { --bs: min(100vw - 24px, 70vh); width: var(--bs); max-width: 100%; position: relative; }
-  #board { width: var(--bs); height: var(--bs); max-width: 100%; }
+  .board-area { width: var(--bs); max-width: 100%; position: relative; }
+  /* the height follows the real width, so the board stays square even when max-width clamps it (classic scrollbars, notches) */
+  #board { width: 100%; height: var(--bs); }
+  @supports (aspect-ratio: 1 / 1) { #board { height: auto; aspect-ratio: 1 / 1; } }
   #board coords.files { left: 0; width: 100%; }   /* keep the file letters inside the board (no horizontal overflow) */
   @media (min-width: 760px) {
-    main.layout { grid-template-columns: minmax(0, 1fr) 340px; align-items: start; padding: 12px 16px 32px; }
-    .board-area { --bs: min(100vw - 32px - 340px - 24px, 84vh, 760px); }
+    main.layout {
+      grid-template-columns: minmax(0, 1fr) 340px; align-items: start;
+      padding: 12px max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left));
+    }
+    .board-col { --bs: min(100vw - 32px - 340px - 24px, 84vh, 760px); }
   }
 
   /* player bars */
@@ -80,10 +87,13 @@
     box-shadow: var(--shadow);
     min-height: 44px;
   }
-  .bar .who { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+  /* The name (with the bot level) keeps its full width; the captured pieces give way and wrap instead. */
+  .bar .who { display: flex; flex-direction: column; flex: 1 0 auto; min-width: 0; max-width: 70%; line-height: 1.2; }
   .bar .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .bar .sub { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  /* width 0 + min-width 100%: the sub-line never widens the name column, it uses the width the column gets */
+  .bar .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 0; min-width: 100%; }
   .bar .clock {
+    flex: none;
     font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600;
     padding: 2px 8px; border-radius: 6px; min-width: 64px; text-align: center;
     color: var(--muted);
@@ -97,7 +107,7 @@
     position: static; display: inline-block; width: 22px; height: 22px;
     z-index: auto; pointer-events: auto; will-change: auto; flex: none;
   }
-  .captured { flex: 1 0 auto; justify-content: flex-end; max-width: 60%; }
+  .captured { flex: 0 1 auto; min-width: 0; justify-content: flex-end; }
   .captured .cap { display: inline-flex; align-items: center; margin-left: 2px; }
   .captured .cap .n { font-size: 11px; color: var(--muted); margin-left: -3px; }
   .captured .balance { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 6px; }
@@ -146,6 +156,7 @@
     border: 0; background: transparent; color: var(--text); text-align: left;
     padding: 4px 6px; border-radius: 6px; cursor: pointer; min-height: 28px;
   }
+  @media (pointer: coarse) { .moves .mv { min-height: 40px; } }
   .moves .mv:hover { background: var(--soft); }
   .moves .mv.current { background: var(--accent); color: var(--accent-text); }
   .moves .empty { grid-column: 1 / -1; color: var(--muted); padding: 4px 0; }
@@ -156,7 +167,9 @@
   .settings select, .settings input {
     appearance: auto; min-height: 40px; padding: 6px 8px; border-radius: 8px;
     border: 1px solid var(--border); background: var(--panel); color: var(--text); max-width: 100%; width: 100%;
+    font-size: 16px;   /* below 16px iOS Safari zooms the page when the control is focused */
   }
+  .settings input[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
   .settings .full { grid-column: 1 / -1; }
   .settings .row { display: flex; gap: 8px; align-items: flex-end; }
   .settings .row label { flex: 1; }
@@ -186,7 +199,10 @@
   .promo .small { font-size: 12px; color: var(--muted); }
 
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16px 20px; }
+  footer {
+    text-align: center; color: var(--muted); font-size: 12px;
+    padding: 0 max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
   footer a { color: inherit; }
 </style>
 </head>
@@ -265,7 +281,7 @@
         </label>
         <div class="c960-only full row">
           <label>Start position (0–959)
-            <input type="number" id="pos960" min="0" max="959" step="1" inputmode="numeric" value="518">
+            <input type="number" id="pos960" min="0" max="959" step="1" inputmode="numeric" enterkeyhint="done" value="518">
           </label>
           <button class="btn" id="btn-random960" type="button">Random</button>
         </div>
