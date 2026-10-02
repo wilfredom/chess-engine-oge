@@ -1362,13 +1362,14 @@ class Search {
       soft = Math.min(usable * 0.8, usable / mtg + inc * 0.75);
       hard = Math.min(usable * 0.8, soft * 4);
     }
+    if (limits.timeScale) soft *= limits.timeScale;      // leave room for the extra lines below
     this.hardTime = this.startTime + hard;
     this.nodeLimit = limits.nodes || Infinity;
     const maxDepth = Math.min(limits.depth || MAX_DEPTH, MAX_DEPTH);
 
     const rootMoves = pos.legalMoves();
     const multiPV = Math.max(1, Math.min(limits.multiPV || 1, rootMoves.length));
-    const result = { moves: [], scores: [], pvs: [], depth: 0 };
+    const result = { moves: [], scores: [], pvs: [], depths: [], depth: 0 };
     if (rootMoves.length === 0) { this.running = false; return result; }
 
     let lastScores = [];
@@ -1407,6 +1408,7 @@ class Search {
         result.moves = order.map(i => iterMoves[i]);
         result.scores = order.map(i => iterScores[i]);
         result.pvs = order.map(i => iterPvs[i]);
+        result.depths = order.map(() => depth);
         result.depth = depth;
         lastScores = result.scores;
         if (!this.silent) this.report(depth, result, limits.reportLines || multiPV);
@@ -1419,10 +1421,36 @@ class Search {
       await yieldToEventLoop();
       if (this.stopRequested) break;
     }
+    if (limits.extraLines && result.moves.length > 0 && !this.stopRequested) this.searchExtraLines(result, limits.extraLines, soft);
     // "go infinite" must wait for "stop" even when the search ran out of depth
     while (limits.infinite && !this.stopRequested) await sleepMs(5);
     this.running = false;
     return result;
+  }
+
+  /* Skill mode: the main search ran as a normal single line search. Now
+     give the next few root moves scores of their own, two plies shallower
+     and within a small extra time slice, so the skill logic can compare
+     them with the best move. This keeps the skill levels' main search as
+     deep as full strength, so the top of the ladder is set by the budget
+     and not by the cost of a five-line search. */
+  searchExtraLines(result, count, soft) {
+    const depth = Math.max(1, result.depth - 2);
+    this.excludedRootMoves = [result.moves[0]];
+    this.allowStop = true;
+    this.hardTime = Math.min(this.hardTime, now() + Math.max(2, soft * 0.6));
+    for (let i = 0; i < count && result.moves.length < this.pos.legalMoves().length; i++) {
+      const score = this.search(depth, -INFINITE, INFINITE, 0, true);
+      if (this.stopped) break;
+      const len = this.pvLength[0];
+      if (len === 0) break;
+      const pv = [];
+      for (let k = 0; k < len; k++) pv.push(this.pvTable[k]);
+      result.moves.push(pv[0]); result.scores.push(score); result.pvs.push(pv); result.depths.push(depth);
+      this.excludedRootMoves.push(pv[0]);
+    }
+    this.excludedRootMoves = [];
+    this.stopped = false;
   }
 
   report(depth, result, lines) {
@@ -1432,6 +1460,7 @@ class Search {
       const s = result.scores[i];
       const score = s >= MATE_IN_MAX ? 'mate ' + Math.ceil((MATE - s) / 2) : s <= -MATE_IN_MAX ? 'mate -' + Math.ceil((MATE + s) / 2) : 'cp ' + s;
       const pv = result.pvs[i].map(m => this.pos.moveToUci(m)).join(' ');
+      if (result.depths && result.depths[i]) depth = result.depths[i];
       this.send(`info depth ${depth} seldepth ${this.seldepth} multipv ${i + 1} score ${score} nodes ${this.nodes} nps ${nps} hashfull ${this.tt.hashfull()} time ${elapsed} pv ${pv}`);
     }
   }
@@ -1698,9 +1727,11 @@ class Engine {
       const mate = isMateInOne(pos, bestMove);
       this.send(`info depth 1 seldepth 1 multipv 1 score ${mate ? 'mate 1' : 'cp 0'} nodes 1 nps 1 time 0 pv ${pos.moveToUci(bestMove)}`);
     } else if (level < MAX_SKILL) {
-      limits.multiPV = 5;
-      limits.reportLines = this.options.multiPV;
+      limits.multiPV = 1;
+      limits.extraLines = 4;          // the top five moves get searched scores
+      limits.timeScale = 0.7;
       const result = await this.search.iterativeDeepening(limits);
+      if (this.options.multiPV > 1) this.search.report(result.depth, result, this.options.multiPV);
       bestMove = chooseSkillMove(this.search, result, level, this.skill, this.rng);
       this.reportChosen(result, bestMove);
     } else {
