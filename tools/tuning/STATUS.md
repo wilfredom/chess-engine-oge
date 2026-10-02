@@ -1,18 +1,22 @@
 # Skill tuning status
 
-Policy (final design): main search at full depth (70% of the normal soft time), then the next four root moves are searched two plies shallower; a move is picked uniformly at random among those whose loss fits the accumulated budget (budget/40 per move, capped at the budget). Unsearched moves get a quiescence estimate floored at max(worst searched loss, 20 cp).
+Final design (engine.js S8): the normal search runs with 70% of the move time; the next four root
+moves are then searched two plies shallower in a bounded extra slice; other legal moves get a
+depth-capped quiescence estimate (mate in one and stalemate recognised) floored at
+max(worst searched loss, 20 cp). Any loss is capped at 2000 cp. Each move adds budget/40 to the
+mover's accumulator (capped at the budget, one per colour); a move is picked uniformly among the
+affordable ones. Mate in one is always played. With an unlimited budget this equals the random
+mover of level 0 (measured: -5 +/- 40 Elo over 200 games).
 
-Coarse ladder at 2+0.02, 100 games per adjacent pair (Elo of A relative to B):
+Pipeline (all at 2+0.02 unless noted, 4 games concurrently, book.epd openings, resign/draw
+adjudication, timemargin 100):
+1. refine.py: adaptive ladder, 100 games per adjacent pair, insert geometric midpoints above
+   220 Elo, drop rungs below 80 Elo, never re-insert a dropped budget.
+2. final_pass.py: 200 fresh games per adjacent pair, pentanomial Elo with 95% CI.
+3. sprt.py: Patricia 5.1 Skill_Level 1 vs engine level 1, SPRT elo0=100 elo1=200 (logistic).
+4. spot_checks.py: 30 games at 60+0.6 for the bottom pair, the pair nearest Patricia level 1,
+   the top pair, and Patricia 1 vs level 1.
 
-```
- random vs 32000  elo  -186.25 +/-   77.68  score 25.5%
-  32000 vs 8000   elo  -603.86 +/-     nan  score 3.0%
-   8000 vs 2000   elo     -inf +/-    -nan  score 0.0%
-   2000 vs 500    elo  -401.92 +/-  151.37  score 9.0%
-    500 vs 125    elo  -346.12 +/-  115.70  score 12.0%
-    125 vs 30     elo  -151.35 +/-   58.34  score 29.5%
-     30 vs 0      elo   -20.87 +/-   55.70  score 47.0%
-      0 vs full   elo   -81.37 +/-   48.28  score 38.5%
-```
-
-Next: tools/tuning/refine.py inserts/drops budgets until every adjacent gap is within [100, 200] Elo, then final_pass.py re-measures every adjacent pair (200 games combined) and sprt.py checks Patricia Skill_Level 1 vs level 1 (elo0=100, elo1=200, logistic). Spot checks at 60+0.6 follow.
+Strong-region rungs (budgets below 2000, unaffected by the last estimator changes):
+1414, 1000, 707, 531, 297, 193, 125, 30, full. Weak region is being re-refined from
+32000 down to 2000. Results land in the scratch tuning directory and are summarised in COLOPHON.md.
