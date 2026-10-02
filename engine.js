@@ -1597,7 +1597,7 @@ function chooseSkillMove(search, result, level, state, rng) {
   state.accumulated[side] = acc;
 
   const best = result.scores[0];
-  if (best >= MATE_IN_MAX) return result.moves[0];        // never spoil a forced mate
+  if (best >= MATE - 1) return result.moves[0];           // mate in one is always played, at every level
 
   // Candidate list: searched lines first. The extra lines were searched a
   // little shallower than the best move, so a line is never rated better
@@ -1619,7 +1619,8 @@ function chooseSkillMove(search, result, level, state, rng) {
   // one-ply static estimate instead of being left out, so the candidate set
   // never depends on move generation order.
   const searched = new Set(result.moves);
-  const alpha = Math.max(-INFINITE + 1, best - Math.min(MAX_LOSS, Math.floor(acc)) - 1);
+  // once the accumulator covers MAX_LOSS nothing is too expensive, not even walking into mate
+  const alpha = acc >= MAX_LOSS ? -INFINITE + 1 : Math.max(-INFINITE + 1, best - Math.floor(acc) - 1);
   const beta = Math.min(INFINITE - 1, best - worstSearched + 1);
   if (alpha < beta) {
     search.stopped = false;
