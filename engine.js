@@ -222,14 +222,21 @@ class Position {
      Shredder-FEN (castling rights given as rook files, e.g. "HAha"). */
   setFen(fen) {
     const parts = fen.trim().split(/\s+/);
-    this.board.fill(EMPTY);
-    let sq = 56;
-    for (const ch of parts[0]) {
-      if (ch === '/') { sq -= 16; continue; }
+    const board = new Int8Array(64), kings = [-1, -1];
+    let sq = 56, rankStart = 56;
+    for (const ch of (parts[0] || '')) {
+      if (ch === '/') { rankStart -= 8; sq = rankStart; if (rankStart < 0) break; continue; }
       if (ch >= '1' && ch <= '8') { sq += ch.charCodeAt(0) - 48; continue; }
       const idx = PIECE_CHARS.indexOf(ch);
-      if (idx > 0) { this.board[sq] = idx; if (typeOf(idx) === KING) this.kingSq[colorOf(idx) >> 3] = sq; sq++; }
+      if (idx > 0 && sq >= rankStart && sq < rankStart + 8) {
+        board[sq] = idx;
+        if (typeOf(idx) === KING) kings[colorOf(idx) >> 3] = sq;
+      }
+      sq++;
     }
+    if (kings[0] < 0 || kings[1] < 0) { if (fen !== START_FEN) this.setFen(START_FEN); throw new Error('invalid FEN (missing king): ' + fen); }
+    this.board.set(board);
+    this.kingSq[0] = kings[0]; this.kingSq[1] = kings[1];
     this.side = parts[1] === 'b' ? BLACK : WHITE;
     this.castling = 0;
     this.castleRook.fill(-1);
@@ -525,6 +532,7 @@ class Position {
      notations whatever the UCI_Chess960 setting. Returns NO_MOVE if
      there is none. */
   parseMove(str) {
+    str = String(str).toLowerCase();
     const moves = this.legalMoves();
     const saved = this.chess960;
     for (const m of moves) {
@@ -1054,6 +1062,7 @@ const now = () => (typeof performance !== 'undefined' ? performance.now() : Date
    current depth (or when the hard time limit trips). */
 const yieldToEventLoop = () => new Promise(resolve =>
   (typeof setImmediate === 'function' ? setImmediate(resolve) : setTimeout(resolve, 0)));
+const sleepMs = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class Search {
   constructor(pos, tt, send) {
@@ -1173,6 +1182,12 @@ class Search {
     h[idx] += clamped * 32 - ((h[idx] * Math.abs(clamped)) >> 9);   // saturates around +-16384
   }
 
+  hasLegalMove(ply) {
+    const base = ply * 256, n = generateMoves(this.pos, this.moveStack, base, false);
+    for (let i = base; i < n; i++) if (this.pos.make(this.moveStack[i])) { this.pos.unmake(); return true; }
+    return false;
+  }
+
   /* ---- The main alpha-beta search ------------------------------- */
   search(depth, alpha, beta, ply, pvNode) {
     const pos = this.pos;
@@ -1180,15 +1195,17 @@ class Search {
     if (this.stopped) return 0;
     const root = ply === 0;
 
+    const inCheck = pos.inCheck();
     if (!root) {
-      if (pos.halfmove >= 100 || pos.isRepetition() || pos.insufficientMaterial()) return 0;
+      if (pos.isRepetition() || pos.insufficientMaterial()) return 0;
+      // fifty-move rule: a draw unless this very position is checkmate
+      if (pos.halfmove >= 100 && (!inCheck || this.hasLegalMove(ply))) return 0;
       // mate distance pruning
       if (alpha < -MATE + ply) alpha = -MATE + ply;
       if (beta > MATE - ply - 1) beta = MATE - ply - 1;
       if (alpha >= beta) return alpha;
     }
     if (ply >= MAX_PLY - 1) return evaluate(pos);
-    const inCheck = pos.inCheck();
     if (depth <= 0) return this.qsearch(alpha, beta, ply);
 
     this.nodes++;
@@ -1356,11 +1373,11 @@ class Search {
 
     let lastScores = [];
     for (let depth = 1; depth <= maxDepth; depth++) {
-      this.allowStop = depth > 1;
       const iterMoves = [], iterScores = [], iterPvs = [];
       this.excludedRootMoves = [];
       let aborted = false;
       for (let pvIdx = 0; pvIdx < multiPV; pvIdx++) {
+        this.allowStop = depth > 1 || pvIdx > 0;     // we must own at least one move before stopping
         let alpha = -INFINITE, beta = INFINITE, delta = 25;
         if (depth >= 5 && pvIdx < lastScores.length) {
           alpha = Math.max(-INFINITE, lastScores[pvIdx] - delta);
@@ -1402,6 +1419,8 @@ class Search {
       await yieldToEventLoop();
       if (this.stopRequested) break;
     }
+    // "go infinite" must wait for "stop" even when the search ran out of depth
+    while (limits.infinite && !this.stopRequested) await sleepMs(5);
     this.running = false;
     return result;
   }
@@ -1511,6 +1530,7 @@ function chooseSkillMove(search, result, level, state, rng) {
   if (alpha < beta) {
     search.stopped = false;
     search.allowStop = true;
+    search.hardTime = Math.max(search.hardTime, now() + 30);
     search.nodeLimit = search.nodes + Math.max(2000, Math.min(30000, search.nodes * 0.2));
     for (const m of pos.legalMoves()) {
       if (searched.has(m) || search.stopped) continue;
@@ -1562,9 +1582,27 @@ class Engine {
     this.lastMoveCount = -1;
     this.quitRequested = false;
     this.onQuit = null;
+    this.pending = [];              // commands received while a search is running
+    this.positionInvalid = false;
   }
 
+  /* Commands that arrive during a search are queued until the search has
+     answered, except the few that must be handled at once. An error in a
+     command becomes an "info string" instead of killing the process. */
   async command(line) {
+    const cmd = line.trim().split(/\s+/)[0];
+    const immediate = cmd === 'stop' || cmd === 'isready' || cmd === 'quit' || cmd === 'uci' || cmd === '';
+    if (this.search.running && !immediate) { this.pending.push(line); return; }
+    await this.execute(line);
+    while (!this.search.running && this.pending.length) await this.execute(this.pending.shift());
+  }
+
+  async execute(line) {
+    try { await this.dispatch(line); }
+    catch (e) { this.send(`info string error: ${e && e.message ? e.message : e}`); }
+  }
+
+  async dispatch(line) {
     const tokens = line.trim().split(/\s+/);
     const cmd = tokens[0];
     switch (cmd) {
@@ -1620,13 +1658,14 @@ class Engine {
     let i = 1, fen = START_FEN;
     if (tokens[i] === 'startpos') i++;
     else if (tokens[i] === 'fen') { i++; const parts = []; while (i < tokens.length && tokens[i] !== 'moves') parts.push(tokens[i++]); fen = parts.join(' '); }
+    this.positionInvalid = false;
     this.pos.setFen(fen);
     this.pos.chess960 = this.options.chess960;
     let count = 0;
     if (tokens[i] === 'moves') {
       for (i++; i < tokens.length; i++) {
         const m = this.pos.parseMove(tokens[i]);
-        if (m === NO_MOVE) { this.send(`info string illegal move ignored: ${tokens[i]}`); break; }
+        if (m === NO_MOVE) { this.send(`info string illegal move: ${tokens[i]}`); this.positionInvalid = true; break; }
         this.pos.make(m); this.pos.gamePly++; count++;
       }
     }
@@ -1651,7 +1690,7 @@ class Engine {
     const pos = this.pos, level = this.options.skill;
     this.search.startTime = now();
 
-    if (pos.legalMoves().length === 0) { this.send('info depth 0 score cp 0'); this.send('bestmove 0000'); return; }
+    if (this.positionInvalid || pos.legalMoves().length === 0) { this.send('info depth 0 score cp 0'); this.send('bestmove 0000'); return; }
 
     let bestMove, ponder = NO_MOVE;
     if (level === 0) {
@@ -1733,14 +1772,14 @@ const BENCH_POSITIONS = [
   'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3',
   'r2q1rk1/ppp2ppp/2n1bn2/2b1p3/3pP3/3P1NP1/PPP1NPBP/R1BQR1K1 b - - 1 10',
   '2rr3k/pp3pp1/1nnqbN1p/3pN3/2pPp3/2P5/PPB4P/R2Q1RK1 w - - 0 1',
-  'r1bq1r1k/1pp1Np1p/p2p2pB/8/4P3/2N5/PPP2PPP/R2QK1R1 b Qq - 0 1',
+  'r1bq1r1k/1pp1Np1p/p2p2pB/8/4P3/2N5/PPP2PPP/R2QK1R1 b - - 0 1',
   '6k1/5p2/6p1/8/7p/8/6PP/6K1 b - - 0 1',
   '8/8/1p1r1k2/p1pPN1p1/P3P1P1/1P2Pp2/1P2P3/5K2 b - - 0 1',
-  '4rrk1/pp1n3p/3q2pQ/2p1pb1/P1P2b1/6P1/1P2P1P1/4RRK1 w - - 0 1',
+  '4rrk1/pp1n3p/3q2pQ/2p1pb2/P1P2b2/6P1/1P2P1P1/4RRK1 w - - 0 1',
   '1r3k2/4q3/2Pp3b/3Bp3/2Q2p2/1p1P2P1/1P2KP2/3N4 w - - 0 1',
   '3r1k2/4npp1/1ppr3p/p6P/P2PPPP1/1NR5/5K2/2R5 w - - 0 1',
   'r1bqk2r/pp2bppp/2p5/3pP3/P2Q1P2/2N1B3/1PP3PP/R4RK1 b kq - 0 1',
-  '2kr1bnr/pbpq4/2n1pp2/3p3p/3P1P1B/2N2N1Q/1PP3PP/R3KR2 b Qkq - 0 1',
+  '2kr1bnr/pbpq4/2n1pp2/3p3p/3P1P1B/2N2N1Q/1PP3PP/R3KR2 b - - 0 1',
   '8/8/8/8/5kp1/P7/8/1K1N4 w - - 0 1',
   '3q2k1/pb3p1p/4pbp1/2r5/PpN2N2/1P2P2P/5PP1/Q2R2K1 b - - 0 1',
   'r2qnrnk/p2b2b1/1p1p2pp/2pPpp2/1PP1P3/PRNBB3/3QNPPP/5RK1 w - - 0 1',
