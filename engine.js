@@ -1539,6 +1539,7 @@ const SKILL_BUDGET_PER_40_MOVES = [
 ];
 const MAX_SKILL = SKILL_BUDGET_PER_40_MOVES.length - 1;
 const MIN_UNSEARCHED_LOSS = 20;   // centipawns; a move outside the searched lines is never rated closer than this
+const MAX_LOSS = 2000;            // a lost game counts as 2000 cp: a very sloppy level can also walk into mate
 
 class SkillState {
   constructor() { this.reset(); }
@@ -1604,7 +1605,7 @@ function chooseSkillMove(search, result, level, state, rng) {
   const candidates = [];
   let worstSearched = 0;
   for (let i = 0; i < result.moves.length; i++) {
-    const loss = i === 0 ? 0 : Math.max(1, best - result.scores[i]);
+    const loss = i === 0 ? 0 : Math.min(MAX_LOSS, Math.max(1, best - result.scores[i]));
     candidates.push({ move: result.moves[i], loss });
     if (loss > worstSearched) worstSearched = loss;
   }
@@ -1618,7 +1619,7 @@ function chooseSkillMove(search, result, level, state, rng) {
   // one-ply static estimate instead of being left out, so the candidate set
   // never depends on move generation order.
   const searched = new Set(result.moves);
-  const alpha = Math.max(-INFINITE + 1, best - Math.floor(acc) - 1);
+  const alpha = Math.max(-INFINITE + 1, best - Math.min(MAX_LOSS, Math.floor(acc)) - 1);
   const beta = Math.min(INFINITE - 1, best - worstSearched + 1);
   if (alpha < beta) {
     search.stopped = false;
@@ -1639,7 +1640,7 @@ function chooseSkillMove(search, result, level, state, rng) {
       }
       pos.unmake();
       if (est <= alpha) continue;                          // costs more than we may spend
-      candidates.push({ move: m, loss: Math.max(worstSearched, best - est) });
+      candidates.push({ move: m, loss: Math.min(MAX_LOSS, Math.max(worstSearched, best - est)) });
     }
     search.qsMaxPly = MAX_PLY;
     search.stopped = false;
