@@ -1,0 +1,53 @@
+{
+ "family": "gaiachess",
+ "pairings": 54,
+ "games": 2160,
+ "time_losses": 0,
+ "span": 3592.7,
+ "slope_per_level": 177.2,
+ "r2": 0.9893,
+ "max_dev": 371.9,
+ "max_dev_level": 20,
+ "gap_mean": 189.1,
+ "gap_sd": 135.6,
+ "gap_min": [
+  56.0,
+  2
+ ],
+ "gap_max": [
+  697.0,
+  20
+ ],
+ "gap_ci_halfwidth_median": 71.1,
+ "rmse_vs_line": 106.3,
+ "gaps": [
+  56.0,
+  174.2,
+  153.8,
+  142.5,
+  146.7,
+  160.3,
+  202.0,
+  272.3,
+  150.6,
+  237.9,
+  111.6,
+  68.9,
+  254.2,
+  174.9,
+  162.3,
+  203.9,
+  115.5,
+  108.0,
+  697.0
+ ],
+ "excl_top_level": {
+  "slope": 170.7,
+  "r2": 0.9966,
+  "max_dev": 107.6,
+  "max_dev_level": 1,
+  "rmse": 54.3,
+  "gap_mean": 160.9,
+  "gap_sd": 58.6
+ }
+}

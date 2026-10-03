@@ -1,0 +1,54 @@
+{
+ "family": "stockfish",
+ "pairings": 57,
+ "games": 2280,
+ "time_losses": 0,
+ "span": 1852.5,
+ "slope_per_level": 75.4,
+ "r2": 0.8763,
+ "max_dev": -315.5,
+ "max_dev_level": 19,
+ "gap_mean": 92.6,
+ "gap_sd": 117.1,
+ "gap_min": [
+  -15.7,
+  18
+ ],
+ "gap_max": [
+  515.5,
+  20
+ ],
+ "gap_ci_halfwidth_median": 54.0,
+ "rmse_vs_line": 171.6,
+ "gaps": [
+  126.0,
+  75.9,
+  114.1,
+  131.6,
+  169.1,
+  208.8,
+  91.4,
+  131.6,
+  70.4,
+  80.4,
+  49.0,
+  19.7,
+  38.9,
+  1.1,
+  5.8,
+  22.2,
+  3.7,
+  -15.7,
+  12.8,
+  515.5
+ ],
+ "excl_top_level": {
+  "slope": 73.4,
+  "r2": 0.8568,
+  "max_dev": -290.6,
+  "max_dev_level": 19,
+  "rmse": 173.1,
+  "gap_mean": 70.4,
+  "gap_sd": 63.4
+ }
+}

@@ -1,0 +1,54 @@
+{
+ "family": "patricia",
+ "pairings": 57,
+ "games": 2280,
+ "time_losses": 0,
+ "span": 2557.2,
+ "slope_per_level": 115.8,
+ "r2": 0.9246,
+ "max_dev": 520.4,
+ "max_dev_level": 21,
+ "gap_mean": 127.9,
+ "gap_sd": 89.8,
+ "gap_min": [
+  2.7,
+  3
+ ],
+ "gap_max": [
+  337.3,
+  21
+ ],
+ "gap_ci_halfwidth_median": 63.1,
+ "rmse_vs_line": 200.1,
+ "gaps": [
+  99.7,
+  2.7,
+  80.0,
+  19.9,
+  61.7,
+  67.4,
+  57.2,
+  105.1,
+  93.4,
+  93.0,
+  101.6,
+  132.0,
+  116.4,
+  213.2,
+  102.1,
+  100.4,
+  229.6,
+  245.9,
+  298.8,
+  337.3
+ ],
+ "excl_top_level": {
+  "slope": 107.5,
+  "r2": 0.9376,
+  "max_dev": 403.0,
+  "max_dev_level": 20,
+  "rmse": 160.0,
+  "gap_mean": 116.8,
+  "gap_sd": 77.1
+ }
+}
